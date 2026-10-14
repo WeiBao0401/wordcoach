@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://dashscope.aliyuncs.com; media-src 'self' blob:">
+<title>Word Coach 体检</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="WC 体检">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#E9F4EC">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root {
+  --paper: #E9F4EC; --card: #FFFFFF; --ink: #16302A; --muted: #5B7268; --rule: #CCE2D4;
+  --accent: #1E7A55; --marker: #FFE14D; --ok: #1E7A55; --warn: #B7791F; --fail: #B42318;
+  --ok-bg: #E3F3E9; --warn-bg: #FDF3DC; --fail-bg: #FDE8E6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0F1D19; --card: #16261F; --ink: #E4F1EA; --muted: #9DB5AA; --rule: #2A4038;
+    --accent: #5FC79A; --marker: #E8C93A; --ok: #5FC79A; --warn: #E3B04B; --fail: #F0857A;
+    --ok-bg: #173327; --warn-bg: #332A14; --fail-bg: #3A1C19;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom));
+}
+main { max-width: 640px; margin: 0 auto; }
+h1 { font-size: 26px; line-height: 1.2; margin: 8px 0 4px; letter-spacing: -0.01em; }
+h1 mark { background: linear-gradient(transparent 55%, var(--marker) 55%); color: inherit; padding: 0 2px; }
+h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; color: var(--muted); margin: 28px 0 8px; }
+p { margin: 6px 0; }
+.sub { color: var(--muted); font-size: 14px; }
+.banner { border-radius: 12px; padding: 12px 14px; margin: 14px 0; font-size: 15px; }
+.banner.fail { background: var(--fail-bg); color: var(--fail); }
+.banner.ok { background: var(--ok-bg); color: var(--ok); }
+ol.steps { padding-left: 20px; margin: 8px 0; font-size: 15px; }
+ol.steps li { margin: 4px 0; }
+.card { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; }
+.row { display: flex; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--rule); align-items: flex-start; }
+.row:first-child { border-top: 0; }
+.dot { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; margin-top: 1px; }
+.dot.ok { background: var(--ok-bg); color: var(--ok); }
+.dot.warn { background: var(--warn-bg); color: var(--warn); }
+.dot.fail { background: var(--fail-bg); color: var(--fail); }
+.dot.pending, .dot.info { background: var(--rule); color: var(--muted); }
+.body { min-width: 0; flex: 1; }
+.title { font-weight: 600; }
+.detail { color: var(--muted); font-size: 14px; word-break: break-word; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+button, select, input {
+  font: inherit; font-size: 15px; border-radius: 10px; border: 1px solid var(--rule);
+  background: var(--paper); color: var(--ink); padding: 9px 14px; min-height: 40px;
+}
+button { cursor: pointer; font-weight: 600; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--marker); outline-offset: 2px; }
+input, select { width: 100%; background: var(--card); }
+.field { margin-top: 8px; }
+.field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, Menlo, monospace; background: var(--paper); border-radius: 8px; padding: 8px; margin: 8px 0 0; max-height: 220px; overflow: auto; }
+.export { margin-top: 28px; display: grid; gap: 10px; }
+.export button { width: 100%; min-height: 48px; }
+footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1><mark>Word Coach</mark> 体检</h1>
+  <p class="sub">在你的 iPhone 上测一遍网页 App 要用到的能力。这个页面不收集任何数据，结果只在你手机上。</p>
+
+  <div id="modeBanner" class="banner fail" hidden></div>
+
+  <h2>怎么用</h2>
+  <ol class="steps">
+    <li>在 Safari 里打开本页，点底部“分享”，选“添加到主屏幕”，保持“作为网页 App 打开”开着</li>
+    <li>从主屏幕的“WC 体检”图标打开，等“自动检测”跑完</li>
+    <li>依次点“手动测试”里的按钮</li>
+    <li>上滑关掉它，打开飞行模式，再从图标打开一次，看“离线启动”变绿；然后关掉飞行模式</li>
+    <li>点最下面的“复制结果”，发给 Claude（截图也行）</li>
+  </ol>
+
+  <h2>自动检测</h2>
+  <div class="card" id="auto"></div>
+
+  <h2>手动测试</h2>
+  <div class="card" id="manual"></div>
+
+  <div class="export">
+    <button class="primary" id="copyResult">复制结果</button>
+    <button id="rerun">重新检测</button>
+  </div>
+  <footer id="foot"></footer>
+</main>
+
+<script>
+'use strict';
+const VERSION = 'check-2';
+const results = {};          // key -> {title, status, detail}
+const order = { auto: [], manual: [] };
+
+// ---------- rendering ----------
+const ICON = { ok: '✓', warn: '!', fail: '✕', pending: '…', info: 'i' };
+function row(group, key, title, extra) {
+  if (!order[group].includes(key)) order[group].push(key);
+  results[key] = results[key] || { title, status: 'pending', detail: '检测中' };
+  results[key].title = title;
+  const el = document.createElement('div');
+  el.className = 'row'; el.id = 'row-' + key;
+  el.innerHTML = '<div class="dot"></div><div class="body"><div class="title"></div><div class="detail"></div></div>';
+  el.querySelector('.title').textContent = title;
+  if (extra) el.querySelector('.body').appendChild(extra);
+  document.getElementById(group).appendChild(el);
+  paint(key);
+}
+function set(key, status, detail) {
+  results[key] = Object.assign(results[key] || {}, { status, detail });
+  paint(key);
+}
+function paint(key) {
+  const el = document.getElementById('row-' + key);
+  if (!el) return;
+  const r = results[key];
+  const dot = el.querySelector('.dot');
+  dot.className = 'dot ' + r.status; dot.textContent = ICON[r.status] || '';
+  el.querySelector('.detail').textContent = r.detail || '';
+}
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'on') for (const [ev, fn] of Object.entries(v)) el.addEventListener(ev, fn);
+    else if (k in el) el[k] = v; else el.setAttribute(k, v);
+  }
+  for (const k of kids) el.append(k);
+  return el;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function withTimeout(p, ms, label) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 超时（' + ms / 1000 + ' 秒）')), ms))]);
+}
+const errText = e => (e && (e.name ? e.name + ': ' : '') + (e.message || e)) || String(e);
+
+// ---------- IndexedDB ----------
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('wc-check', 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      db.createObjectStore('kv');
+      db.createObjectStore('words', { keyPath: 'id' });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error('blocked'));
+  });
+}
+function tx(db, store, mode, fn) {
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode);
+    const s = t.objectStore(store);
+    let out;
+    Promise.resolve(fn(s)).then(v => { out = v; });
+    t.oncomplete = () => res(out);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));
+  });
+}
+const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+// ---------- environment ----------
+const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const iosMatch = navigator.userAgent.match(/OS (\d+)_(\d+)(?:_(\d+))?/);
+const iosVersion = iosMatch ? iosMatch.slice(1).filter(Boolean).join('.') : null;
+
+function showModeBanner() {
+  const b = document.getElementById('modeBanner');
+  if (!standalone) {
+    b.hidden = false; b.className = 'banner fail';
+    b.textContent = '现在是在 Safari 标签页里打开的。请先按下面第 1 步添加到主屏幕，再从图标打开，检测结果才准确。';
+  } else {
+    b.hidden = false; b.className = 'banner ok';
+    b.textContent = '已从主屏幕图标打开。';
+  }
+}
+
+// ---------- auto checks ----------
+async function checkDevice() {
+  const major = iosVersion ? parseInt(iosVersion, 10) : null;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const info = `iOS ${iosVersion || '未知'} · 屏幕 ${screen.width}×${screen.height} @${devicePixelRatio}x · ${navigator.language} · ${tz}`;
+  if (major && major >= 27) set('device', 'ok', info);
+  else if (major === 26) set('device', 'warn', info + '。建议升到 iOS 27：它修了网页 App 存储偶尔卡住的问题');
+  else set('device', 'info', info);
+}
+function checkStandalone() {
+  set('standalone', standalone ? 'ok' : 'fail', standalone ? '从主屏幕打开（独立窗口）' : '在 Safari 标签页里。数据和主屏幕 App 是分开的两份');
+}
+function checkSecure() {
+  const how = location.protocol === 'https:' ? 'HTTPS' : '本机测试';
+  set('secure', isSecureContext ? 'ok' : 'fail', isSecureContext ? `安全环境（${how}）· ${location.origin}` : '不是 HTTPS，离线、存储、剪贴板都用不了');
+}
+async function checkSW() {
+  if (!('serviceWorker' in navigator)) return set('sw', 'fail', '不支持 Service Worker');
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.register('./sw.js'), 10000, '注册');
+    await withTimeout(navigator.serviceWorker.ready, 10000, '启用');
+    const controlled = !!navigator.serviceWorker.controller;
+    const cache = await caches.open(await swCacheName());
+    const keys = await cache.keys();
+    set('sw', controlled ? 'ok' : 'warn',
+      (controlled ? '离线缓存已接管本页' : '已注册，下次打开才会接管（第一次打开属正常）') + ` · 缓存了 ${keys.length} 个文件 · 作用域 ${reg.scope.replace(location.origin, '')}`);
+  } catch (e) { set('sw', 'fail', errText(e)); }
+}
+async function swCacheName() { return 'wc-check-' + VERSION; }
+
+async function checkPersist() {
+  if (!navigator.storage || !navigator.storage.persist) return set('persist', 'fail', '不支持持久存储接口');
+  try {
+    const granted = await withTimeout(navigator.storage.persist(), 8000, '申请');
+    const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : granted;
+    let est = '';
+    if (navigator.storage.estimate) {
+      const e = await navigator.storage.estimate();
+      est = ` · 已用 ${(e.usage / 1048576).toFixed(1)} MB / 可用约 ${(e.quota / 1073741824).toFixed(1)} GB`;
+    }
+    set('persist', persisted ? 'ok' : 'warn', (persisted ? '已获得持久存储，系统不会因空间紧张自动清掉' : '没有获得持久存储（在 Safari 标签页里通常如此）') + est);
+  } catch (e) { set('persist', 'fail', errText(e)); }
+}
+
+async function checkIDB() {
+  if (!('indexedDB' in window)) return set('idb', 'fail', '不支持 IndexedDB');
+  try {
+    const db = await withTimeout(openDB(), 8000, '打开数据库');
+    // launch log: proves data survives app restarts and days
+    const now = new Date();
+    const launches = (await withTimeout(tx(db, 'kv', 'readonly', s => reqP(s.get('launches'))), 8000, '读取')) || [];
+    launches.push({ at: now.toISOString(), standalone, online: navigator.onLine });
+    await withTimeout(tx(db, 'kv', 'readwrite', s => { s.put(launches.slice(-100), 'launches'); }), 8000, '写入');
+    results.launches = launches;
+    const first = new Date(launches[0].at);
+    const days = Math.floor((now - first) / 86400000);
+    const offline = launches.filter(l => !l.online && l.standalone).length;
+    set('launches', launches.length > 1 ? 'ok' : 'info',
+      `第 ${launches.length} 次打开 · 第一次在 ${first.toLocaleString('zh-CN')}（${days} 天前）` + (launches.length > 1 ? ' · 数据在重启后还在' : ' · 关掉再打开一次，这里应该变成第 2 次'));
+    set('offline', offline ? 'ok' : (navigator.onLine ? 'pending' : 'warn'),
+      offline ? `离线时成功打开过 ${offline} 次` : (navigator.onLine ? '还没测：打开飞行模式后从图标再打开一次' : '当前离线，但不是从主屏幕打开的'));
+
+    // bulk write: 2000 word-sized records, about the size of a real word list
+    const filler = 'x'.repeat(1800);
+    const t0 = performance.now();
+    await withTimeout(tx(db, 'words', 'readwrite', s => {
+      for (let i = 0; i < 2000; i++) s.put({ id: 'w' + i, headword: 'word' + i, body: filler, updated: Date.now() });
+    }), 20000, '批量写入');
+    const t1 = performance.now();
+    const count = await withTimeout(tx(db, 'words', 'readonly', s => reqP(s.count())), 8000, '计数');
+    const all = await withTimeout(tx(db, 'words', 'readonly', s => reqP(s.getAll())), 20000, '全部读取');
+    const t2 = performance.now();
+    db.close();
+    const ok = count === 2000 && all.length === 2000;
+    set('idb', ok ? ((t1 - t0) > 5000 ? 'warn' : 'ok') : 'fail',
+      `写入 2000 条（约 4 MB）用时 ${Math.round(t1 - t0)} ms，全部读出 ${Math.round(t2 - t1)} ms` + (ok ? '' : ` · 只读到 ${all.length} 条`));
+  } catch (e) {
+    set('idb', 'fail', errText(e));
+    set('launches', 'fail', '数据库打不开，无法记录');
+  }
+}
+function checkLocalStorage() {
+  try {
+    const n = parseInt(localStorage.getItem('wc-check-n') || '0', 10) + 1;
+    localStorage.setItem('wc-check-n', String(n));
+    set('ls', 'ok', `可用（第 ${n} 次写入）`);
+  } catch (e) { set('ls', 'fail', errText(e)); }
+}
+
+let shareFiles = {};
+function prepareShareFiles() {
+  const payload = JSON.stringify({ app: 'wordcoach-check', at: new Date().toISOString(), words: Array.from({ length: 200 }, (_, i) => ({ id: 'w' + i, headword: 'word' + i })) });
+  shareFiles = {
+    json: new File([payload], 'wordcoach-check.json', { type: 'application/json' }),
+    txt: new File([payload], 'wordcoach-check.txt', { type: 'text/plain' }),
+  };
+}
+function checkShare() {
+  if (!navigator.share) return set('share', 'fail', '不支持系统分享');
+  if (!navigator.canShare) return set('share', 'warn', '有分享，但没有 canShare，文件分享能不能用要手动测');
+  const json = navigator.canShare({ files: [shareFiles.json] });
+  const txt = navigator.canShare({ files: [shareFiles.txt] });
+  set('share', json || txt ? 'ok' : 'fail', `可分享 JSON 文件：${json ? '是' : '否'} · 可分享文本文件：${txt ? '是' : '否'}`);
+}
+function checkMisc() {
+  const items = [
+    ['剪贴板', !!(navigator.clipboard && navigator.clipboard.readText)],
+    ['压缩', 'CompressionStream' in window],
+    ['加密', !!(window.crypto && crypto.subtle)],
+    ['通知', 'Notification' in window],
+    ['推送', 'PushManager' in window],
+    ['角标', 'setAppBadge' in navigator],
+    ['语音', 'speechSynthesis' in window],
+  ];
+  const missing = items.filter(i => !i[1]).map(i => i[0]);
+  set('misc', missing.length === 0 ? 'ok' : (standalone ? 'warn' : 'info'),
+    items.map(i => `${i[0]}${i[1] ? '✓' : '✕'}`).join(' ') + (missing.length && !standalone ? ' · 通知、推送、角标只在主屏幕 App 里才有' : ''));
+}
+async function checkVoices() {
+  if (!('speechSynthesis' in window)) return set('voices', 'fail', '不支持');
+  let voices = speechSynthesis.getVoices();
+  for (let i = 0; i < 10 && voices.length === 0; i++) { await sleep(200); voices = speechSynthesis.getVoices(); }
+  // novelty and robotic voices are useless for pronunciation, keep them out of the list
+  const NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Junior|Ralph|Fred|Kathy|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/;
+  const en = voices.filter(v => /^en[-_]/i.test(v.lang) && !NOVELTY.test(v.name));
+  results.voiceList = en.map(v => `${v.name} (${v.lang})`);
+  fillVoiceSelect(en);
+  set('voices', en.length ? 'ok' : 'warn', en.length ? `${en.length} 个可用的英文人声：` + en.slice(0, 8).map(v => `${v.name} ${v.lang}`).join('、') + (en.length > 8 ? ' 等' : '') : '没有找到英文语音');
+}
+
+async function runAuto() {
+  for (const k of order.auto) if (results[k]) { results[k].status = 'pending'; results[k].detail = '检测中'; paint(k); }
+  checkDevice(); checkStandalone(); checkSecure(); checkLocalStorage(); checkShare(); checkMisc();
+  await Promise.all([checkSW(), checkPersist(), checkIDB(), checkVoices()]);
+}
+
+// ---------- manual tests ----------
+function askPair(key, okLabel, failLabel, okDetail, failDetail) {
+  const wrap = h('div', { className: 'actions' },
+    h('button', { textContent: okLabel, on: { click: () => { set(key, 'ok', okDetail); wrap.remove(); } } }),
+    h('button', { textContent: failLabel, on: { click: () => { set(key, 'fail', failDetail); wrap.remove(); } } }));
+  document.querySelector('#row-' + key + ' .body').appendChild(wrap);
+}
+
+function manualPaste() {
+  const btn = h('button', { textContent: '先在别处复制一个单词，再点这里', on: { click: () => {
+    // must call readText directly inside the tap
+    navigator.clipboard.readText().then(t => {
+      set('paste', t ? 'ok' : 'warn', t ? `读到 ${t.length} 个字：“${t.slice(0, 40)}”` : '剪贴板是空的');
+    }).catch(e => set('paste', 'fail', errText(e)));
+  } } });
+  row('manual', 'paste', '粘贴查词：读剪贴板', h('div', { className: 'actions' }, btn));
+  set('paste', 'pending', '点按钮后会出现系统的“粘贴”小气泡，点它');
+}
+
+function manualBigCopy() {
+  const btn = h('button', { textContent: '复制 300 KB 测试数据', on: { click: () => {
+    const big = JSON.stringify({ test: 'wordcoach-backup', pad: 'y'.repeat(300 * 1024) });
+    navigator.clipboard.writeText(big).then(() => set('bigcopy', 'ok', '写入剪贴板成功（备份要经过剪贴板交给快捷指令）'))
+      .catch(e => set('bigcopy', 'fail', errText(e)));
+  } } });
+  row('manual', 'bigcopy', '备份：大段数据进剪贴板', h('div', { className: 'actions' }, btn));
+  set('bigcopy', 'pending', '点一下即可');
+}
+
+function manualShareFile() {
+  const btn = h('button', { textContent: '分享测试文件', on: { click: () => {
+    const f = navigator.canShare && navigator.canShare({ files: [shareFiles.json] }) ? shareFiles.json : shareFiles.txt;
+    navigator.share({ files: [f] }).then(() => {
+      set('sharefile', 'info', `分享面板已完成（${f.name}）。存进“文件”App 了吗？`);
+      askPair('sharefile', '存进去了', '没有“存储到文件”', `能把 ${f.name} 存到“文件”App`, '分享面板里没有“存储到文件”');
+    }).catch(e => set('sharefile', e.name === 'AbortError' ? 'warn' : 'fail', e.name === 'AbortError' ? '分享被取消了，再试一次并选“存储到文件”' : errText(e)));
+  } } });
+  row('manual', 'sharefile', '备份：存文件到“文件”App', h('div', { className: 'actions' }, btn));
+  set('sharefile', 'pending', '在分享面板里选“存储到文件”，随便存个位置');
+}
+
+function manualShortcut() {
+  let jumped = false;
+  const btn = h('button', { textContent: '跳到快捷指令', on: { click: () => {
+    jumped = true;
+    navigator.clipboard.writeText('wordcoach-check ' + new Date().toISOString()).catch(() => {});
+    location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent('WordCoach测试') + '&input=clipboard';
+    setTimeout(() => {
+      set('shortcut', 'info', '回到这里后告诉我结果');
+      askPair('shortcut', '快捷指令 App 打开了', '没反应 / 报错', '能从网页 App 跳到快捷指令（提示“找不到快捷指令”也算成功）', '跳不过去');
+    }, 800);
+  } } });
+  row('manual', 'shortcut', '备份：跳转快捷指令', h('div', { className: 'actions' }, btn));
+  set('shortcut', 'pending', '会打开快捷指令 App。它说“找不到 WordCoach测试”是正常的，说明能跳过去');
+}
+
+let voiceSelect;
+function fillVoiceSelect(en) {
+  if (!voiceSelect) return;
+  voiceSelect.innerHTML = '';
+  const sorted = en.slice().sort((a, b) => (a.lang === 'en-US' ? -1 : 0) - (b.lang === 'en-US' ? -1 : 0));
+  for (const v of sorted) voiceSelect.append(h('option', { value: v.name, textContent: `${v.name} · ${v.lang}` }));
+}
+function manualSpeak() {
+  voiceSelect = h('select', { 'aria-label': '选择语音' });
+  const btn = h('button', { textContent: '读一下 meticulous', on: { click: () => {
+    const u = new SpeechSynthesisUtterance('meticulous. She is meticulous about details.');
+    const v = speechSynthesis.getVoices().find(x => x.name === voiceSelect.value);
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
+    u.rate = 0.9;
+    u.onend = () => {
+      set('speak', 'info', `用 ${v ? v.name : '默认语音'} 读完了。听到了吗？`);
+      askPair('speak', '听到了，音质可以', '没声音 / 太难听', `能发音（${v ? v.name : '默认'}）`, `没声音或音质差（${v ? v.name : '默认'}）。可改用千问语音合成`);
+    };
+    u.onerror = e => set('speak', 'fail', '发音出错：' + (e.error || ''));
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  } } });
+  row('manual', 'speak', '发音：系统语音', h('div', {}, h('div', { className: 'field' }, voiceSelect), h('div', { className: 'actions' }, btn)));
+  set('speak', 'pending', '先把手机侧边的静音关掉');
+}
+
+function manualBailian() {
+  const key = h('input', { type: 'password', placeholder: 'sk-…', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, 'aria-label': '百炼 API Key' });
+  const model = h('select', { 'aria-label': '模型' });
+  for (const m of ['qwen-flash', 'qwen3.7-flash', 'qwen-plus', 'qwen3.7-plus']) model.append(h('option', { value: m, textContent: m }));
+  const out = h('pre', { hidden: true });
+  const btn = h('button', { className: 'primary', textContent: '查一个词', on: { click: async () => {
+    const k = key.value.trim();
+    if (!k) return set('bailian', 'warn', '先填 Key');
+    set('bailian', 'pending', `正在用 ${model.value} 查 meticulous`);
+    out.hidden = true;
+    const body = {
+      model: model.value,
+      messages: [
+        { role: 'system', content: 'You are an English-Chinese learner dictionary. Reply with json only: {"headword":"","phonetic":"","brief_cn":"","example":"","example_cn":""}' },
+        { role: 'user', content: 'meticulous' },
+      ],
+      response_format: { type: 'json_object' },
+      enable_thinking: false,
+      max_tokens: 400,
+    };
+    const t0 = performance.now();
+    try {
+      const r = await withTimeout(fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + k, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }), 30000, '百炼请求');
+      const ms = Math.round(performance.now() - t0);
+      const data = await r.json().catch(() => null);
+      if (!r.ok) {
+        const msg = data && (data.error && (data.error.message || data.error.code) || data.message || data.code);
+        return set('bailian', 'fail', `HTTP ${r.status} · ${ms} ms · ${msg || '无详情'}`);
+      }
+      const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '';
+      let parsed = null;
+      try { parsed = JSON.parse(content); } catch (_) {}
+      const u = data.usage || {};
+      // plain text only: never render model output as HTML
+      out.textContent = parsed ? JSON.stringify(parsed, null, 2) : content;
+      out.hidden = false;
+      results.bailianRuns = (results.bailianRuns || []).concat([{ model: model.value, ms, json: !!parsed, tokens: u.total_tokens }]);
+      set('bailian', parsed ? (ms > 8000 ? 'warn' : 'ok') : 'warn',
+        `${model.value} · ${ms} ms · ${u.prompt_tokens || '?'} + ${u.completion_tokens || '?'} tokens · JSON ${parsed ? '正常' : '解析失败'}` + (ms > 8000 ? ' · 偏慢' : ''));
+    } catch (e) {
+      set('bailian', 'fail', `${Math.round(performance.now() - t0)} ms · ${errText(e)}（如果是 Load failed，多半是网络或跨域被拦）`);
+    }
+  } } });
+  row('manual', 'bailian', '查词：直连百炼', h('div', {},
+    h('div', { className: 'field' }, h('label', { textContent: 'API Key（只在这次测试里用，不保存）' }), key),
+    h('div', { className: 'field' }, h('label', { textContent: '模型（可以每个都试一次）' }), model),
+    h('div', { className: 'actions' }, btn), out));
+  set('bailian', 'pending', '关掉 VPN 测一次；开着 VPN 再测一次更好');
+}
+
+function manualNotify() {
+  const btn = h('button', { textContent: '申请通知权限并设角标', on: { click: async () => {
+    if (!('Notification' in window)) return set('notify', 'fail', standalone ? '不支持通知' : '只有从主屏幕打开才支持通知');
+    try {
+      const p = await Notification.requestPermission();
+      if (p !== 'granted') return set('notify', 'warn', `权限：${p}（这个只影响“WC 体检”图标，不影响以后的 Word Coach）`);
+      if (navigator.setAppBadge) { await navigator.setAppBadge(3); set('notify', 'ok', '已允许通知，图标上应该出现角标 3。回主屏幕看一眼'); }
+      else set('notify', 'warn', '已允许通知，但不支持角标');
+    } catch (e) { set('notify', 'fail', errText(e)); }
+  } } });
+  row('manual', 'notify', '提醒：通知权限和角标（可选）', h('div', { className: 'actions' }, btn));
+  set('notify', 'pending', '会弹系统权限框，点“允许”');
+}
+
+// ---------- export ----------
+function summary() {
+  const out = { version: VERSION, at: new Date().toISOString(), origin: location.origin + location.pathname, ios: iosVersion, standalone, ua: navigator.userAgent, results: {} };
+  for (const k of order.auto.concat(order.manual)) out.results[k] = { s: results[k].status, d: results[k].detail };
+  out.voices = results.voiceList;
+  out.bailianRuns = results.bailianRuns;
+  out.launches = (results.launches || []).slice(-10);
+  return JSON.stringify(out, null, 1);
+}
+document.getElementById('copyResult').addEventListener('click', () => {
+  navigator.clipboard.writeText(summary())
+    .then(() => { document.getElementById('copyResult').textContent = '已复制，粘贴发给 Claude'; })
+    .catch(() => { const p = h('pre', { textContent: summary() }); document.querySelector('.export').appendChild(p); });
+});
+document.getElementById('rerun').addEventListener('click', runAuto);
+
+// a new sw.js (new cache name) took over: reload once so the page matches the new files
+if ('serviceWorker' in navigator) {
+  // skip the very first install, where clients.claim() also fires controllerchange
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded || !hadController) return;
+    reloaded = true; location.reload();
+  });
+}
+
+// ---------- boot ----------
+showModeBanner();
+row('auto', 'device', '设备和系统');
+row('auto', 'standalone', '打开方式');
+row('auto', 'secure', '网页地址');
+row('auto', 'sw', '离线缓存');
+row('auto', 'persist', '持久存储');
+row('auto', 'idb', '本机数据库（IndexedDB）');
+row('auto', 'launches', '重启后数据还在吗');
+row('auto', 'offline', '离线启动');
+row('auto', 'ls', '本机小存储（localStorage）');
+row('auto', 'share', '分享文件');
+row('auto', 'voices', '系统英文语音');
+row('auto', 'misc', '其他能力');
+manualPaste();
+manualBailian();
+manualSpeak();
+manualBigCopy();
+manualShareFile();
+manualShortcut();
+manualNotify();
+prepareShareFiles();
+document.getElementById('foot').textContent = `${VERSION} · ${location.host}`;
+runAuto();
+</script>
+</body>
+</html>

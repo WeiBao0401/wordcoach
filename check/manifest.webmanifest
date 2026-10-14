@@ -1,0 +1,15 @@
+{
+  "name": "Word Coach 体检",
+  "short_name": "WC 体检",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#E9F4EC",
+  "theme_color": "#E9F4EC",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
