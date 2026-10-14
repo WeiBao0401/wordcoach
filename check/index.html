@@ -25,6 +25,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
@@ -79,7 +80,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: cen
 
   <h2>怎么用</h2>
   <ol class="steps">
-    <li>在 Safari 里打开本页，点底部“分享”，选“添加到主屏幕”，保持“作为网页 App 打开”开着</li>
+    <li>在 Safari 里打开本页，点地址栏旁的“…”，再点“分享”（有的设置下底部直接有分享按钮），往下找到“添加到主屏幕”，保持“作为网页 App 打开”开着</li>
     <li>从主屏幕的“WC 体检”图标打开，等“自动检测”跑完</li>
     <li>依次点“手动测试”里的按钮</li>
     <li>上滑关掉它，打开飞行模式，再从图标打开一次，看“离线启动”变绿；然后关掉飞行模式</li>
@@ -101,7 +102,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: cen
 
 <script>
 'use strict';
-const VERSION = 'check-2';
+const VERSION = 'check-3';
 const results = {};          // key -> {title, status, detail}
 const order = { auto: [], manual: [] };
 
@@ -522,7 +523,21 @@ manualShortcut();
 manualNotify();
 prepareShareFiles();
 document.getElementById('foot').textContent = `${VERSION} · ${location.host}`;
-runAuto();
+if (standalone) runAuto();
+else {
+  // in a Safari tab, run nothing heavy (no service worker, no database writes),
+  // so the page cannot slow down Safari's share sheet while adding to Home Screen
+  for (const id of ['auto', 'manual']) document.getElementById(id).hidden = true;
+  document.querySelectorAll('h2').forEach(el => { if (el.textContent !== '怎么用') el.hidden = true; });
+  document.querySelector('.export').hidden = true;
+  const more = h('button', { textContent: '仍要在 Safari 里检测', on: { click: () => {
+    for (const id of ['auto', 'manual']) document.getElementById(id).hidden = false;
+    document.querySelectorAll('h2').forEach(el => { el.hidden = false; });
+    document.querySelector('.export').hidden = false;
+    more.remove(); runAuto();
+  } } });
+  document.querySelector('ol.steps').after(h('p', { className: 'sub', textContent: '在 Safari 里本页什么都不做，免得影响“添加到主屏幕”。' }), h('div', { className: 'actions' }, more));
+}
 </script>
 </body>
 </html>
