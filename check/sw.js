@@ -1,5 +1,5 @@
 // Offline shell for the check page: cache-first, so the page opens even when the host is unreachable.
-const CACHE = 'wc-check-check-3';
+const CACHE = 'wc-check-check-4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

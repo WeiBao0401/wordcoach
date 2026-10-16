@@ -102,7 +102,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: cen
 
 <script>
 'use strict';
-const VERSION = 'check-3';
+const VERSION = 'check-4';
 const results = {};          // key -> {title, status, detail}
 const order = { auto: [], manual: [] };
 
@@ -176,8 +176,11 @@ const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result);
 
 // ---------- environment ----------
 const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+// Since iOS 26 the UA freezes the OS at 18.x; Safari's Version/ number tracks the real iOS version.
 const iosMatch = navigator.userAgent.match(/OS (\d+)_(\d+)(?:_(\d+))?/);
-const iosVersion = iosMatch ? iosMatch.slice(1).filter(Boolean).join('.') : null;
+const safariMatch = navigator.userAgent.match(/Version\/(\d+(?:\.\d+)*)/);
+const iosVersion = safariMatch && parseInt(safariMatch[1], 10) >= 26 ? safariMatch[1]
+  : (iosMatch ? iosMatch.slice(1).filter(Boolean).join('.') : null);
 
 function showModeBanner() {
   const b = document.getElementById('modeBanner');
