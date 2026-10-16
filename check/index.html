@@ -102,7 +102,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: cen
 
 <script>
 'use strict';
-const VERSION = 'check-4';
+const VERSION = 'check-5';
 const results = {};          // key -> {title, status, detail}
 const order = { auto: [], manual: [] };
 
@@ -413,7 +413,7 @@ function manualSpeak() {
 function manualBailian() {
   const key = h('input', { type: 'password', placeholder: 'sk-…', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, 'aria-label': '百炼 API Key' });
   const model = h('select', { 'aria-label': '模型' });
-  for (const m of ['qwen-flash', 'qwen3.7-flash', 'qwen-plus', 'qwen3.7-plus']) model.append(h('option', { value: m, textContent: m }));
+  for (const m of ['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.8-max', 'deepseek-v4-pro', 'qwen-plus']) model.append(h('option', { value: m, textContent: m }));
   const out = h('pre', { hidden: true });
   const btn = h('button', { className: 'primary', textContent: '查一个词', on: { click: async () => {
     const k = key.value.trim();
@@ -428,7 +428,6 @@ function manualBailian() {
       ],
       response_format: { type: 'json_object' },
       enable_thinking: false,
-      max_tokens: 400,
     };
     const t0 = performance.now();
     try {
