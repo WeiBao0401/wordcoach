@@ -11,6 +11,8 @@ export function createMeTab(app) {
   root.replaceChildren();
   let prepared = null;     // {file, json, count, total, size}
   let importState = null;  // {name, data, preview} | {done} | {error}
+  let speed = null;        // speed test: {running, results: [...]} | {error}
+  let speedBox = null;     // where the speed test draws (rebuilt by every render)
 
   const group = (title, ...rows) => h('section', { className: 'group-box' }, title ? h('h2', { className: 'group-title', text: title }) : null,
     h('div', { className: 'group-card' }, ...rows));
@@ -54,34 +56,91 @@ export function createMeTab(app) {
   function modelSection() {
     const s = app.settings();
     const forced = app.mockForced();
+    speedBox = h('div', { className: 'speed-box' });
+    paintSpeed();
     return group('模型',
       ...MODEL_ROWS.map(([k, label, sub]) => {
         const cur = s.models[k];
         const sel = h('select', { className: 'select', 'aria-label': label });
-        const choices = [...new Set([...MODEL_CHOICES, cur].filter(Boolean))];
-        for (const m of choices) sel.append(h('option', { value: m, text: m }));
+        const ids = MODEL_CHOICES.map(c => c.id);
+        for (const m of [...new Set([...ids, cur].filter(Boolean))]) {
+          const c = MODEL_CHOICES.find(x => x.id === m);
+          sel.append(h('option', { value: m, text: c ? `${m} · ${c.label}` : m }));
+        }
         sel.append(h('option', { value: '__custom', text: '自己填…' }));
         sel.value = cur;
         const custom = h('div', { className: 'key-edit', hidden: true });
         const ci = h('input', { type: 'text', className: 'field', placeholder: '模型名，比如 qwen-plus-latest', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': '自定义模型名' });
+        // modelsChosen: from now on this profile keeps its models when a new version changes the defaults
+        const pick = async v => {
+          await app.saveSettings({ models: { ...app.settings().models, [k]: v }, modelsChosen: true });
+          toast(`${label}改用 ${v}`);
+        };
         custom.append(ci, h('div', { className: 'btn-row' },
           h('button', { type: 'button', className: 'btn primary', text: '保存', on: { click: async () => {
             const v = ci.value.trim();
             if (!v) return;
-            await app.saveSettings({ models: { ...app.settings().models, [k]: v } });
-            toast(`${label}改用 ${v}`);
+            await pick(v);
             render();
           } } }),
           h('button', { type: 'button', className: 'btn', text: '取消', on: { click: () => { custom.hidden = true; sel.value = cur; } } })));
         sel.addEventListener('change', async () => {
           if (sel.value === '__custom') { custom.hidden = false; ci.focus(); return; }
-          await app.saveSettings({ models: { ...app.settings().models, [k]: sel.value } });
-          toast(`${label}改用 ${sel.value}`);
+          await pick(sel.value);
         });
-        return row(label, sub, sel, custom);
+        return row(label, sub, null, h('div', { className: 'model-pick' }, sel, custom));
       }),
+      h('div', { className: 'set-row' }, speedBox),
       row('模拟模式', forced ? '地址里带了 ?mock=1，这次打开一直是模拟模式' : '不调百炼，返回假数据（会存进本机词库），只在测试时打开',
         toggle(s.mock || forced, v => app.saveSettings({ mock: v }).then(() => { toast(v ? '已打开模拟模式' : '已关闭模拟模式'); app.refreshBanners(); }), { disabled: forced, label: '模拟模式' })));
+  }
+
+  // Speed test (SPEC 2.4): each model once with the saved key, one after another; nothing is stored.
+  async function runSpeed() {
+    if (speed && speed.running) return;   // a second tap while it runs does nothing
+    speed = { running: true, results: [] };
+    paintSpeed();
+    try {
+      await app.ai.speedTest({ onResult: r => { if (speed && speed.results) { speed.results.push(r); paintSpeed(); } } });
+      speed.running = false;
+    } catch (e) {
+      speed = { error: (e && e.message) || String(e) };
+    }
+    paintSpeed();
+  }
+  function paintSpeed() {
+    if (!speedBox) return;
+    const st = speed || {};
+    // replaceChildren would print a null as text, so the optional parts are filtered out
+    speedBox.replaceChildren(...[
+      h('p', { className: 'set-sub', text: '每个模型查一次，总共不到 5 分钱' }),
+      h('button', { type: 'button', className: 'textbtn speed-btn', text: st.running ? '正在测…' : '测一下速度', disabled: !!st.running,
+        'aria-busy': st.running ? 'true' : null, on: { click: runSpeed } }),
+      st.error ? h('p', { className: 'speed-err', role: 'alert', text: st.error }) : null,
+      st.results ? speedList(st) : null].filter(Boolean));
+  }
+  function speedList(st) {
+    const done = st.results;
+    const good = r => r.ok && r.json;
+    // the fastest model whose reply came back as valid JSON, once every model has been tried
+    const best = st.running ? null : done.filter(good).sort((a, b) => a.ms - b.ms)[0] || null;
+    return h('div', { className: 'speed-result' },
+      h('ul', { className: 'speed-list', 'aria-live': 'polite' },
+        ...MODEL_CHOICES.map((c, i) => {
+          const r = done.find(x => x.id === c.id);
+          const sub = h('span', { className: 'speed-sub', text: `${c.label} · ${c.note}` });
+          if (!r) {
+            const now = st.running && i === done.length;
+            return h('li', { className: 'speed-item' + (now ? ' now' : ' wait') },
+              h('span', { className: 'speed-id', text: c.id }), h('span', { className: 'speed-val muted' + (now ? ' dots' : ''), text: now ? '正在测' : '等待' }), sub);
+          }
+          return h('li', { className: 'speed-item' + (r === best ? ' best' : '') },
+            h('span', { className: 'speed-id' }, c.id, r === best ? h('span', { className: 'tag', text: '最快' }) : null),
+            h('span', { className: 'speed-val' + (good(r) ? '' : ' bad'), text: `${(r.ms / 1000).toFixed(1)} 秒 · ${good(r) ? 'JSON 正常' : r.ok ? 'JSON 出错' : '出错'}` }),
+            sub,
+            r.error ? h('span', { className: 'speed-err', text: r.error }) : null);
+        })),
+      h('p', { className: 'speed-foot', text: '价格是每百万 tokens 的输入 / 输出' }));
   }
 
   function studySection() {
@@ -353,6 +412,6 @@ export function createMeTab(app) {
       changeTimer = setTimeout(() => { if (app.currentTab() === 'me' && !(importState && importState.busy) && !typing()) render(); }, 200);
     },
     // something on this tab would be lost by an automatic reload
-    holding: () => !!prepared || preparing || !!(importState && (importState.data || importState.busy)),
+    holding: () => !!prepared || preparing || !!(importState && (importState.data || importState.busy)) || !!(speed && speed.running),
   };
 }

@@ -102,7 +102,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: cen
 
 <script>
 'use strict';
-const VERSION = 'check-5';
+const VERSION = 'check-6';
 const results = {};          // key -> {title, status, detail}
 const order = { auto: [], manual: [] };
 
@@ -173,6 +173,57 @@ function tx(db, store, mode, fn) {
   });
 }
 const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+// ---------- the key saved in Word Coach ----------
+// Opened from Word Coach (我的 → 设备体检页, a link inside the app's scope) this page runs in Word Coach's storage and
+// can use the Bailian key saved there. Opened from its own “WC 体检” icon it has storage of its own and finds nothing.
+// Resolves to { app, key }: app = Word Coach's database is here, key = its saved key ('' when none).
+// Read only, and it never creates the "wordcoach" database: an empty one made here (version 1, no stores) would
+// stop Word Coach, which opens version 1, from ever creating its stores.
+async function savedKey(name = 'wordcoach') {
+  const none = { app: false, key: '' };
+  if (typeof indexedDB === 'undefined' || !indexedDB) return none;
+  try {
+    // Safari 14+: a database that is not listed is never opened at all
+    if (typeof indexedDB.databases === 'function') {
+      const list = await withTimeout(indexedDB.databases(), 3000, '列出数据库');
+      if (!list.some(d => d && d.name === name)) return none;
+    }
+  } catch (_) { /* fall through: the open below still never creates it */ }
+  return new Promise(resolve => {
+    let done = false, db = null;
+    const finish = out => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { if (db) db.close(); } catch (_) {}
+      resolve(out);
+    };
+    const timer = setTimeout(() => finish(none), 3000);   // iOS 26 can stall IndexedDB
+    let r;
+    try { r = indexedDB.open(name); } catch (_) { finish(none); return; }
+    // without a version this only fires when the database does not exist: abort, so it is not created
+    r.onupgradeneeded = () => { try { r.transaction.abort(); } catch (_) {} };
+    r.onerror = e => { if (e && e.preventDefault) e.preventDefault(); finish(none); };
+    r.onblocked = () => finish(none);
+    r.onsuccess = () => {
+      db = r.result;
+      db.onversionchange = () => db.close();   // never hold up a Word Coach upgrade
+      if (done) { try { db.close(); } catch (_) {} return; }
+      try {
+        if (!db.objectStoreNames.contains('meta')) return finish(none);
+        const g = db.transaction('meta', 'readonly').objectStore('meta').get('settings');
+        g.onsuccess = () => {
+          const st = g.result;
+          finish({ app: true, key: st && typeof st.apiKey === 'string' ? st.apiKey.trim() : '' });
+        };
+        g.onerror = () => finish({ app: true, key: '' });
+      } catch (_) { finish(none); }
+    };
+  });
+}
+// set by manualBailian(); runs at boot when opened from a Home Screen icon, or when the Safari-tab checks start
+let findSavedKey = () => {};
 
 // ---------- environment ----------
 const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
@@ -411,12 +462,14 @@ function manualSpeak() {
 }
 
 function manualBailian() {
+  let saved = '';   // the key saved in Word Coach, when this page can read it (savedKey)
   const key = h('input', { type: 'password', placeholder: 'sk-…', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, 'aria-label': '百炼 API Key' });
   const model = h('select', { 'aria-label': '模型' });
   for (const m of ['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.8-max', 'deepseek-v4-pro', 'qwen-plus']) model.append(h('option', { value: m, textContent: m }));
   const out = h('pre', { hidden: true });
   const btn = h('button', { className: 'primary', textContent: '查一个词', on: { click: async () => {
-    const k = key.value.trim();
+    const typed = key.value.trim();
+    const k = typed || saved;
     if (!k) return set('bailian', 'warn', '先填 Key');
     set('bailian', 'pending', `正在用 ${model.value} 查 meticulous`);
     out.hidden = true;
@@ -447,18 +500,40 @@ function manualBailian() {
       // plain text only: never render model output as HTML
       out.textContent = parsed ? JSON.stringify(parsed, null, 2) : content;
       out.hidden = false;
-      results.bailianRuns = (results.bailianRuns || []).concat([{ model: model.value, ms, json: !!parsed, tokens: u.total_tokens }]);
+      results.bailianRuns = (results.bailianRuns || []).concat([{ model: model.value, ms, json: !!parsed, tokens: u.total_tokens, key: typed ? 'typed' : 'wordcoach' }]);
       set('bailian', parsed ? (ms > 8000 ? 'warn' : 'ok') : 'warn',
         `${model.value} · ${ms} ms · ${u.prompt_tokens || '?'} + ${u.completion_tokens || '?'} tokens · JSON ${parsed ? '正常' : '解析失败'}` + (ms > 8000 ? ' · 偏慢' : ''));
     } catch (e) {
       set('bailian', 'fail', `${Math.round(performance.now() - t0)} ms · ${errText(e)}（如果是 Load failed，多半是网络或跨域被拦）`);
     }
   } } });
-  row('manual', 'bailian', '查词：直连百炼', h('div', {},
-    h('div', { className: 'field' }, h('label', { textContent: 'API Key（只在这次测试里用，不保存）' }), key),
+  // the key field shows only when no key was found in Word Coach, or after “换一个 Key”
+  const keyNote = h('p', { className: 'sub', textContent: '正在找 Word Coach 里存的 Key…' });
+  const keyField = h('div', { className: 'field', hidden: true }, h('label', { textContent: 'API Key（只在这次测试里用，不保存）' }), key);
+  const otherKey = h('button', { textContent: '换一个 Key', hidden: true, on: { click: () => {
+    otherKey.hidden = true; keyField.hidden = false; key.focus();
+  } } });
+  row('manual', 'bailian', '查词：直连百炼', h('div', {}, keyNote, keyField,
     h('div', { className: 'field' }, h('label', { textContent: '模型（可以每个都试一次）' }), model),
-    h('div', { className: 'actions' }, btn), out));
+    h('div', { className: 'actions' }, btn, otherKey), out));
   set('bailian', 'pending', '关掉 VPN 测一次；开着 VPN 再测一次更好');
+  let looked = false;
+  findSavedKey = async () => {
+    if (looked) return;
+    looked = true;
+    const found = await savedKey();
+    saved = found.key;
+    if (saved) {
+      keyNote.textContent = `用 Word Coach 里存的 Key（····${saved.slice(-4)}），不用再填。`;
+      otherKey.hidden = !keyField.hidden;
+      return;
+    }
+    keyNote.textContent = found.app
+      ? 'Word Coach 里还没填 Key。先到 Word Coach 的“我的”里填好，或者在下面填一个只这次用的。'
+      : '从“WC 体检”图标打开时读不到 Word Coach 里存的 Key，要在下面填。从 Word Coach 的“我的 → 设备体检页”进来就不用填。';
+    keyField.hidden = false;
+    otherKey.hidden = true;
+  };
 }
 
 function manualNotify() {
@@ -525,7 +600,7 @@ manualShortcut();
 manualNotify();
 prepareShareFiles();
 document.getElementById('foot').textContent = `${VERSION} · ${location.host}`;
-if (standalone) runAuto();
+if (standalone) { runAuto(); findSavedKey(); }
 else {
   // in a Safari tab, run nothing heavy (no service worker, no database writes),
   // so the page cannot slow down Safari's share sheet while adding to Home Screen
@@ -536,7 +611,7 @@ else {
     for (const id of ['auto', 'manual']) document.getElementById(id).hidden = false;
     document.querySelectorAll('h2').forEach(el => { el.hidden = false; });
     document.querySelector('.export').hidden = false;
-    more.remove(); runAuto();
+    more.remove(); runAuto(); findSavedKey();
   } } });
   document.querySelector('ol.steps').after(h('p', { className: 'sub', textContent: '在 Safari 里本页什么都不做，免得影响“添加到主屏幕”。' }), h('div', { className: 'actions' }, more));
 }

@@ -1,6 +1,6 @@
-// Bailian (DashScope) OpenAI-compatible calls: retries, truncation, tolerant JSON, mock mode.
-import { API_URL, BUDGET, MAX_BUDGET, RETRY_DELAYS, TIMEOUT_MS } from './config.js';
-import { SYSTEM } from './prompts.js';
+// Bailian (DashScope) OpenAI-compatible calls: retries, truncation, tolerant JSON, mock mode, the model speed test.
+import { API_URL, RETRY_DELAYS, TIMEOUT_MS, MODEL_CHOICES, SPEED_WORD, SPEED_TIMEOUT_MS } from './config.js';
+import { SYSTEM, userMsg } from './prompts.js';
 
 export class AIError extends Error {
   constructor(message, code = 'error') { super(message); this.name = 'AIError'; this.code = code; }
@@ -23,6 +23,18 @@ export function parseJSON(text) {
 }
 
 const modelFor = (kind, models) => (kind === 'core' ? models.core : kind === 'zh' ? models.zh : models.extras);
+
+// Every call sends this body. Thinking off (all current models think by default), json mode on, and no max_tokens
+// (the Bailian json-mode doc says not to set it with structured output).
+export function requestBody(model, system, user) {
+  return {
+    model,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    enable_thinking: false,
+    response_format: { type: 'json_object' },
+  };
+}
+const keyOk = k => /^[\x21-\x7e]+$/.test(k);
 
 function errorDetail(data) {
   if (!data || typeof data !== 'object') return { code: '', message: '' };
@@ -49,10 +61,12 @@ function httpError(status, data, model) {
   return new AIError(`百炼返回 ${status}：${message || code || '没有详情'}`, 'http');
 }
 
-export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Math.random, timeouts = TIMEOUT_MS } = {}) {
+const clockMs = () => (globalThis.performance ? performance.now() : Date.now());
+
+export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Math.random, timeouts = TIMEOUT_MS, now = clockMs } = {}) {
   const doFetch = fetchImpl || ((...a) => fetch(...a));
 
-  async function callOnce({ model, system, user, maxTokens, signal, timeoutMs, apiKey }) {
+  async function callOnce({ model, system, user, signal, timeoutMs, apiKey }) {
     const ctrl = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
@@ -66,13 +80,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
       res = await doFetch(API_URL, {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-          max_tokens: maxTokens,
-          enable_thinking: false,
-          response_format: { type: 'json_object' },
-        }),
+        body: JSON.stringify(requestBody(model, system, user)),
         signal: ctrl.signal,
       });
       data = await res.json().catch(() => null);
@@ -91,8 +99,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     }
     const choice = data && data.choices && data.choices[0];
     const content = String((choice && choice.message && choice.message.content) || '').trim();
-    const used = (data && data.usage && data.usage.completion_tokens) || 0;
-    if ((choice && choice.finish_reason === 'length') || used >= maxTokens) throw new Truncated(`输出被截断（用满 ${maxTokens} tokens）`);
+    if (choice && choice.finish_reason === 'length') throw new Truncated('输出被截断');
     if (!content) throw new Retryable('empty');
     return content;
   }
@@ -126,7 +133,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     const mock = !!s.mock;
     if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：到“我的”里填上，或者先打开模拟模式。', 'nokey');
     // an invisible character in the key makes fetch throw, which would look like a network problem
-    if (!mock && !/^[\x21-\x7e]+$/.test(s.apiKey)) throw new AIError('百炼 API Key 格式不对：到“我的”里重新粘贴。', 'badkey');
+    if (!mock && !keyOk(s.apiKey)) throw new AIError('百炼 API Key 格式不对：到“我的”里重新粘贴。', 'badkey');
     // test hook (?mock=offline): every call fails the way a dropped connection does
     if (mock && s.mockFail === 'network') {
       await sleep(300);
@@ -134,20 +141,20 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
       throw new AIError(NETWORK_MSG, 'network');
     }
     const model = modelFor(kind, s.models);
-    let maxTokens = BUDGET[kind] || 2000;
+    // up to 3 requests: a reply that does not parse is asked for again; a cut-off reply only once more (same request,
+    // there is no budget to raise), since a model that runs past its own output limit twice will do it again
     let lastErr = null;
+    let cuts = 0;
     for (let i = 0; i < 3; i++) {
       let text;
       try {
         text = mock
           ? await mockReply(kind, user, { sleep, random, signal })
-          : await callWithRetry({ model, system: SYSTEM[kind], user, maxTokens, signal, timeoutMs: timeouts[kind] || 60000, apiKey: s.apiKey,
+          : await callWithRetry({ model, system: SYSTEM[kind], user, signal, timeoutMs: timeouts[kind] || 60000, apiKey: s.apiKey,
             retryTimeout: kind !== 'core' && kind !== 'zh' });
       } catch (e) {
         if (e instanceof Truncated) {
-          lastErr = e;
-          if (maxTokens >= MAX_BUDGET) break;
-          maxTokens = Math.min(MAX_BUDGET, maxTokens * 2);
+          if (++cuts >= 2) throw new AIError(`模型“${model}”的回答太长，两次都被截断了：再试一次，或者到“我的”里换个模型。`, 'truncated');
           continue;
         }
         throw e;
@@ -161,7 +168,79 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     throw new AIError(`模型返回的内容不完整：${lastErr ? lastErr.message : '未知原因'}`, 'incomplete');
   }
 
-  return { askJSON };
+  // ---------------------------------------------------------------- speed test (我的 → 模型, SPEC 2.4)
+  // The real core prompt for SPEED_WORD, once per model, one after another, with the saved key. No retries (each
+  // result is one request's time) and nothing is stored: results only go to the caller, never to words.js or the log.
+  async function speedTest({ choices = MODEL_CHOICES, word = SPEED_WORD, timeoutMs = SPEED_TIMEOUT_MS, onResult } = {}) {
+    const s = getSettings();
+    const mock = !!s.mock;
+    if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：先在上面“百炼 API Key”里填好，再来测。', 'nokey');
+    if (!mock && !keyOk(s.apiKey)) throw new AIError('百炼 API Key 格式不对：在上面重新粘贴一次。', 'badkey');
+    const results = [];
+    for (const c of choices) {
+      const t0 = now();
+      const out = mock ? await mockSpeed(c.id, s, word) : await speedOnce(c.id, s.apiKey, word, timeoutMs);
+      const r = { id: c.id, ms: Math.max(0, Math.round(now() - t0)), ok: false, json: false, error: '', ...out };
+      results.push(r);
+      if (onResult) onResult(r, results.length - 1);
+    }
+    return results;
+  }
+
+  async function speedOnce(model, apiKey, word, timeoutMs) {
+    const ctrl = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
+    let res, data;
+    try {
+      res = await doFetch(API_URL, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody(model, SYSTEM.core, userMsg(word))),
+        signal: ctrl.signal,
+      });
+      data = await res.json().catch(() => null);
+    } catch (e) {
+      return { error: timedOut ? `超过 ${Math.round(timeoutMs / 1000)} 秒没回` : '连不上：网络不通，或者请求被拦截了' };
+    } finally { clearTimeout(timer); }
+    if (timedOut) return { error: `超过 ${Math.round(timeoutMs / 1000)} 秒没回` };
+    if (!res.ok) return { status: res.status, error: speedError(res.status, data) };
+    const choice = data && data.choices && data.choices[0];
+    const content = String((choice && choice.message && choice.message.content) || '').trim();
+    if (choice && choice.finish_reason === 'length') return { ok: true, error: '回答被截断了' };
+    if (!content) return { ok: true, error: '返回了空内容' };
+    try {
+      const obj = parseJSON(content);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return { ok: true, json: true };
+    } catch (e) { /* reported below */ }
+    return { ok: true, error: '返回的不是 JSON' };
+  }
+
+  // mock mode: varied timings, and one model that the key "has not enabled", so every row type shows up
+  async function mockSpeed(model, s, word) {
+    if (s.mockFail === 'network') { await sleep(300); return { error: '连不上：网络不通，或者请求被拦截了' }; }
+    await sleep((MOCK_SPEED_MS[model] || 900) + Math.floor(random() * 300));
+    if (model === 'deepseek-v4-pro') return { status: 403, error: '403：这个 Key 没开通这个模型（模拟）' };
+    const obj = parseJSON(await mockReply('core', userMsg(word), { sleep: async () => {}, random }));
+    return { ok: true, json: !!(obj && obj.headword) };
+  }
+
+  return { askJSON, speedTest };
+}
+
+const MOCK_SPEED_MS = { 'qwen3.8-flash': 600, 'qwen3.7-flash': 450, 'qwen3.7-plus': 1000, 'qwen3.8-max': 1500, 'deepseek-v4-pro': 350, 'qwen-plus': 800 };
+
+// Short reasons for the speed test list (the lookup errors above are full sentences with what to do next).
+export function speedError(status, data) {
+  const { code, message } = errorDetail(data);
+  const blob = (code + ' ' + message).toLowerCase();
+  if (status === 401 || blob.includes('invalid_api_key') || blob.includes('invalidapikey')) return 'Key 不对或已失效（401）';
+  if (blob.includes('arrearage') || blob.includes('overdue') || blob.includes('good standing')) return '账户欠费或预算用完了';
+  if (status === 403) return '403：这个 Key 没开通这个模型';
+  if (blob.includes('model_not_found') || blob.includes('model not exist') || blob.includes('does not exist')) return `没有这个模型，或者这个 Key 用不了（${status}）`;
+  if (status === 429) return '限流了（429），过一会儿再测';
+  if (status >= 500) return `百炼服务出错（${status}）`;
+  return `百炼返回 ${status}：${message || code || '没有详情'}`;
 }
 
 // ---------------------------------------------------------------- mock (port of server.py mock_reply)

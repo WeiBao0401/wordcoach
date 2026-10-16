@@ -7,7 +7,7 @@ import { classifyPaste, isChinese, normalizeQuery, hasExtras } from './words.js'
 const CTX_HINT_EN = '粘贴你看到它的原句（可选），解释会贴着这句话讲';
 const CTX_HINT_ZH = '使用场景（可选），比如“工作邮件里”“跟老板汇报”，会按场景推荐说法';
 const SUG_RE = /^[A-Za-z][A-Za-z '’.-]*$/;   // typeahead only for English letters
-const SETTINGS_CODES = ['nokey', 'badkey', 'model', 'forbidden'];
+const SETTINGS_CODES = ['nokey', 'badkey', 'model', 'forbidden', 'truncated'];
 
 export function createLookTab(app) {
   const root = document.getElementById('tab-look');

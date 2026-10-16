@@ -1,6 +1,6 @@
 // IndexedDB "wordcoach" v1 (the words) and "wordcoach-audio" v1 (Qwen voice clips) + import/export.
 // Nothing here touches indexedDB at import time, so the pure helpers (merge, export format, gzip) can be tested in Node.
-import { DB_NAME, DB_VERSION, AUDIO_DB_NAME, AUDIO_DB_VERSION, DB_TIMEOUT_MS, LOG_CAP } from './config.js';
+import { DB_NAME, DB_VERSION, AUDIO_DB_NAME, AUDIO_DB_VERSION, DB_TIMEOUT_MS, LOG_CAP, DEFAULT_SETTINGS, DEFAULT_MODELS, OLD_DEFAULT_MODEL } from './config.js';
 import { fromSM2, newCard } from './fsrs.js';
 import { CORE_KEYS } from './prompts.js';
 
@@ -140,6 +140,28 @@ export const idbStore = {
     }
   },
 };
+
+// ---------------------------------------------------------------- settings (pure)
+
+// Saved settings (meta "settings") -> the settings the app runs with. Returns { settings, migrated }; when migrated is
+// true the caller writes settings back. Models (SPEC 2.4): modelsChosen is set once a model is changed in 我的. While
+// it is false the profile follows DEFAULT_MODELS, so a later change of the defaults reaches it on the next launch;
+// once it is true the saved models are kept. Settings saved before v0.4 have no modelsChosen: there, three
+// OLD_DEFAULT_MODEL (qwen-plus, or missing) count as never changed, and any other model as picked by hand.
+export function loadSettings(saved) {
+  const base = structuredClone(DEFAULT_SETTINGS);
+  if (!saved || typeof saved !== 'object') return { settings: base, migrated: false };
+  const keys = Object.keys(DEFAULT_MODELS);
+  const stored = saved.models && typeof saved.models === 'object' ? saved.models : {};
+  const kept = {};
+  for (const k of keys) if (typeof stored[k] === 'string' && stored[k].trim()) kept[k] = stored[k].trim();
+  const hasFlag = typeof saved.modelsChosen === 'boolean';
+  const chosen = hasFlag ? saved.modelsChosen : !keys.every(k => !kept[k] || kept[k] === OLD_DEFAULT_MODEL);
+  const models = chosen ? { ...DEFAULT_MODELS, ...kept } : { ...DEFAULT_MODELS };
+  // written back when the models changed, or to record modelsChosen on settings saved before it existed
+  const migrated = !hasFlag || keys.some(k => stored[k] !== models[k]);
+  return { settings: { ...base, ...saved, modelsChosen: chosen, models }, migrated };
+}
 
 // ---------------------------------------------------------------- import / export (pure)
 

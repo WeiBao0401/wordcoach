@@ -1,6 +1,6 @@
 // Offline shell for Word Coach: cache-first, versioned.
 // Keep VERSION identical to VERSION in js/config.js and bump both on every release, or phones keep the old files.
-const VERSION = '0.3';
+const VERSION = '0.4';
 const CACHE = 'wordcoach-' + VERSION;
 // The offline dictionary (data/, about 4.6 MB, 2 MB gzipped) changes rarely, so it lives in its own cache that
 // survives app updates and is only downloaded when missing. Bump DATA_VERSION whenever a file in data/ changes.

@@ -1,14 +1,29 @@
 // Keep VERSION identical to VERSION in sw.js; bump both on every release.
-export const VERSION = '0.3';
+export const VERSION = '0.4';
 
 export const API_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 
-export const DEFAULT_MODELS = { core: 'qwen-plus', extras: 'qwen-plus', zh: 'qwen-plus' };
-export const MODEL_CHOICES = ['qwen-flash', 'qwen3.7-flash', 'qwen-plus', 'qwen3.7-plus'];
+// Models (SPEC 5): picked 2026-10-16 from the Bailian docs. note = price in CNY per 1M tokens, input / output.
+export const DEFAULT_MODELS = { core: 'qwen3.8-flash', extras: 'qwen3.7-plus', zh: 'qwen3.8-max' };
+// Changing DEFAULT_MODELS reaches every profile whose models were never changed in 我的 (settings.modelsChosen false):
+// loadSettings in db.js swaps them on the next launch. A model picked in 我的 sets modelsChosen and is never replaced.
+// OLD_DEFAULT_MODEL is the default up to v0.3, saved before modelsChosen existed: there, three of it count as never
+// changed (SPEC 2.4).
+export const OLD_DEFAULT_MODEL = 'qwen-plus';
+export const MODEL_CHOICES = [
+  { id: 'qwen3.8-flash', label: '快速 · 查词推荐', tier: 'fast', note: '0.8 / 2.7 元' },
+  { id: 'qwen3.7-flash', label: '快速 · 最省钱', tier: 'fast', note: '0.2 / 0.8 元' },
+  { id: 'qwen3.7-plus', label: '均衡 · 扩展推荐', tier: 'balanced', note: '2 / 8 元' },
+  { id: 'qwen3.8-max', label: '最强 · 中译英推荐', tier: 'max', note: '12 / 36 元' },
+  { id: 'deepseek-v4-pro', label: 'DeepSeek · 实验', tier: 'experimental', note: '12 / 24 元' },
+  { id: 'qwen-plus', label: '旧版 · 兜底', tier: 'legacy', note: '0.8 / 2 元' },
+];
+// 我的 → 模型 → 测一下速度: the real core prompt for this word, once per model, with this timeout each
+export const SPEED_WORD = 'meticulous';
+export const SPEED_TIMEOUT_MS = 30000;
 
-// Output token budgets per call; doubled on truncation up to MAX_BUDGET.
-export const BUDGET = { core: 1500, lexicon: 2500, practice: 2500, zh: 2000, story: 2500 };
-export const MAX_BUDGET = 6000;
+// No max_tokens: the Bailian json-mode doc says not to set it with structured output. A reply cut off anyway
+// (finish_reason "length") is asked for once more, then reported (ai.js).
 export const RETRY_DELAYS = [1500, 3000];
 export const TIMEOUT_MS = { core: 40000, lexicon: 60000, practice: 60000, zh: 45000, story: 60000 };
 
@@ -29,6 +44,7 @@ export const SHRINK_RATIO = 0.8;
 export const DEFAULT_SETTINGS = {
   apiKey: '',
   models: { ...DEFAULT_MODELS },
+  modelsChosen: false, // true once a model is changed in 我的; while false, the models follow DEFAULT_MODELS (loadSettings)
   mock: false,
   guessFirst: true,
   newPerDay: NEW_PER_DAY,

@@ -1,6 +1,6 @@
 // Boot: settings, data, tabs, banners, badge, service worker.
-import { VERSION, DEFAULT_SETTINGS, DEFAULT_MODELS } from './config.js';
-import { idbStore } from './db.js';
+import { VERSION, DEFAULT_SETTINGS } from './config.js';
+import { idbStore, loadSettings } from './db.js';
 import { createAI } from './ai.js';
 import { createWords } from './words.js';
 import { createDict } from './dict.js';
@@ -57,7 +57,7 @@ let sheetView = null;
 const TABS = [['look', '查词', 'search'], ['lib', '词库', 'book'], ['review', '复习', 'cards'], ['me', '我的', 'me']];
 
 const app = {
-  words, dict, speech, tts, voice, store: idbStore, version: VERSION,
+  words, dict, speech, tts, voice, ai, store: idbStore, version: VERSION,
   say: (text, button, opts) => voice.say(text, button, opts),
   settings: () => settings,
   async saveSettings(patch) {
@@ -255,8 +255,10 @@ async function boot() {
   buildTabbar();
   registerSW();
   try {
-    const saved = await idbStore.getMeta('settings');
-    if (saved && typeof saved === 'object') settings = { ...settings, ...saved, models: { ...DEFAULT_MODELS, ...(saved.models || {}) } };
+    const loaded = loadSettings(await idbStore.getMeta('settings'));
+    settings = loaded.settings;
+    // models never changed in 我的 follow DEFAULT_MODELS (SPEC 2.4); if this write fails, the next launch does it again
+    if (loaded.migrated) await idbStore.setMeta('settings', settings).catch(e => console.warn('settings migration:', (e && e.message) || e));
     lastExport = (await idbStore.getMeta('lastExport')) || null;
     await words.load();
   } catch (e) {
