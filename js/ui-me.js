@@ -222,8 +222,8 @@ export function createMeTab(app) {
     const le = app.lastExport();
     const st = app.words.stats(app.settings().newPerDay);
     const exportBox = h('div', { className: 'export-box' });
-    if (!prepared) {
-      exportBox.append(h('button', { type: 'button', className: 'btn primary wide', text: '导出备份', on: { click: prepare } }));
+    if (!prepared || prepared.carry) {
+      exportBox.append(h('button', { type: 'button', className: 'btn primary wide', text: '导出备份', disabled: !!prepared, on: { click: () => prepare(false) } }));
     } else if (prepared.downloaded) {
       // a download gives no signal that a file was saved, so ask before clearing the reminder
       exportBox.append(
@@ -272,13 +272,15 @@ export function createMeTab(app) {
       const r = s.done;
       return h('div', { className: 'ok-box' },
         h('p', { text: `导入完成：新增 ${r.added} 个，合并 ${r.merged} 个，${r.unchanged} 个没变化${r.zhAdded ? `，中译英 ${r.zhAdded} 条` : ''}。` }),
-        h('p', { className: 'small', text: `词库 ${r.before.library} → ${r.after.library} 个，全部 ${r.before.total} → ${r.after.total} 个。` }));
+        h('p', { className: 'small', text: `词库 ${r.before.library} → ${r.after.library} 个，全部 ${r.before.total} → ${r.after.total} 个。` }),
+        r.carried ? h('p', { className: 'small', text: `百炼 Key 和设置也带过来了。确认词都在以后，就可以删掉旧的图标了。` }) : null);
     }
     const d = s.data, p = s.preview;
     const src = d.source === 'mac' ? 'Mac 上' : d.source === 'phone' ? '手机上' : '';
     return h('div', { className: 'confirm-box' },
       h('p', { className: 'small', text: `“${s.name}”：${src}导出于 ${localYmd(d.exported_at) || '未知日期'}，${p.total} 个词（收藏 ${p.incomingFav} 个），中译英 ${(d.zh || []).length} 条。` }),
       h('p', { className: 'small', text: `导入后：新增 ${p.added} 个，合并 ${p.merged} 个，${p.unchanged} 个没变化${p.skipped ? `，${p.skipped} 条格式不对跳过` : ''}。现在词库 ${p.before.library} 个。导入不会删除任何东西。` }),
+      carryNote(d.carry),
       h('div', { className: 'btn-row' },
         h('button', { type: 'button', className: 'btn primary', text: '导入', on: { click: doImport } }),
         h('button', { type: 'button', className: 'btn', text: '取消', on: { click: () => { importState = null; render(); } } })));
@@ -287,14 +289,57 @@ export function createMeTab(app) {
   function aboutSection() {
     return group('',
       h('div', { className: 'about' },
-        h('p', { text: `Word Coach 网页版 v${VERSION}` }),
-        h('p', { className: 'small muted', text: '数据只在这台手机里。永远从主屏幕图标打开；不要删图标再添加，那样会丢掉全部数据。' }),
+        h('p', { text: `Wei 的词典 v${VERSION}` }),
+        h('p', { className: 'small muted', text: '数据只在这台手机里。永远从主屏幕图标打开。要换图标，先用“搬到新图标”把数据带过去，再删旧图标。' }),
         h('p', {}, h('a', { href: './check/', className: 'link', text: '设备体检页' }))));
+  }
+
+  // ---------------------------------------------------------------- move to a new Home Screen icon
+  // Each Home Screen icon keeps its own data. Changing the icon or the name means adding a new icon and moving the data.
+  const CARRY_KEYS = ['models', 'modelsChosen', 'guessFirst', 'newPerDay', 'voiceMode', 'qwenVoice', 'voice'];
+  function carryFrom(s) {
+    const settings = {};
+    for (const k of CARRY_KEYS) if (s[k] !== undefined) settings[k] = s[k];
+    return { apiKey: s.apiKey || '', settings };
+  }
+  function carryNote(c) {
+    if (!c || typeof c !== 'object') return null;
+    const k = typeof c.apiKey === 'string' && c.apiKey ? `百炼 Key（····${c.apiKey.slice(-4)}）和设置` : '设置';
+    return h('p', { className: 'small', text: app.settings().apiKey ? `文件里带着${k}。这里已经有 Key，保留这里的。` : `文件里带着${k}，会一起放进来。` });
+  }
+  // Only fills an empty icon: an existing key and settings are never overwritten.
+  async function applyCarry(c) {
+    if (!c || typeof c !== 'object' || app.settings().apiKey) return false;
+    const patch = {};
+    if (typeof c.apiKey === 'string' && /^[\x21-\x7e]{8,200}$/.test(c.apiKey)) patch.apiKey = c.apiKey;
+    const st = c.settings && typeof c.settings === 'object' ? c.settings : {};
+    for (const k of CARRY_KEYS) if (st[k] !== undefined) patch[k] = st[k];
+    if (!Object.keys(patch).length) return false;
+    await app.saveSettings(patch);
+    return true;
+  }
+  function moveSection() {
+    const box = h('div', { className: 'export-box' });
+    if (prepared && prepared.carry) {
+      box.append(h('p', { className: 'small', text: `搬家文件准备好了：${prepared.file.name}（${prepared.total} 个词）。点“存到“文件””，在分享面板里选“存储到文件”。这个文件里有你的百炼 Key，只用来搬家，别发给别人。` }),
+        h('div', { className: 'btn-row' },
+          h('button', { type: 'button', className: 'btn primary', text: '存到“文件”', on: { click: share } }),
+          prepared.downloaded
+            ? h('button', { type: 'button', className: 'btn', text: '存好了', on: { click: () => exported('download') } })
+            : h('button', { type: 'button', className: 'btn', text: '改用下载', on: { click: () => download(prepared.file) } })));
+    } else {
+      box.append(h('button', { type: 'button', className: 'btn primary wide', text: '第一步：打包我的数据', on: { click: () => prepare(true) } }));
+    }
+    return group('搬到新图标',
+      row('为什么要搬', '主屏幕上每个图标的数据是分开存的。换图标或名字，要先添加新图标，再把数据搬过去。', null),
+      row('第一步（在旧图标里）', '打包词库、复习进度、笔记，连同百炼 Key 和设置，存进“文件”App。', null, box),
+      row('第二步（在新图标里）', '打开新图标 → 我的 → 导入文件，选刚才的 wordcoach-move 文件。Key 和设置会一起放进来，不用重填。', null),
+      row('第三步', '在新图标里确认词都在，再删掉旧图标。', null));
   }
 
   // ---------------------------------------------------------------- export
   let preparing = false;
-  async function prepare() {
+  async function prepare(carry = false) {
     if (preparing) return;
     preparing = true;
     try {
@@ -302,10 +347,12 @@ export function createMeTab(app) {
       toast('正在打包…', 4000);
       const at = new Date();
       const data = await app.words.exportData();
+      // the move file also takes the key and settings, so the new icon works without typing anything
+      if (carry === true) data.carry = carryFrom(app.settings());
       const gz = await gzipJSON(data);
-      const name = `wordcoach-backup-${localYmd(at)}.json.gz`;
+      const name = carry === true ? `wordcoach-move-${localYmd(at)}.json.gz` : `wordcoach-backup-${localYmd(at)}.json.gz`;
       prepared = { file: new File([gz], name, { type: 'application/gzip' }), data, size: gz.byteLength, at: at.toISOString(),
-        count: data.entries.filter(e => e.favorited).length, total: data.entries.length };
+        count: data.entries.filter(e => e.favorited).length, total: data.entries.length, carry: carry === true };
       render();
       toast('备份文件准备好了');
     } catch (e) {
@@ -368,6 +415,7 @@ export function createMeTab(app) {
     app.busy(+1);
     try {
       const r = await app.words.importData(s.data);
+      r.carried = await applyCarry(s.data.carry);
       importState = { done: r };
       toast('导入完成');
       app.refreshBanners();
@@ -399,7 +447,7 @@ export function createMeTab(app) {
   function render() {
     root.replaceChildren(
       h('header', { className: 'tab-head' }, h('h1', { text: '我的' })),
-      keySection(), modelSection(), studySection(), dataSection(), aboutSection());
+      keySection(), modelSection(), studySection(), moveSection(), dataSection(), aboutSection());
   }
 
   const typing = () => root.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName);

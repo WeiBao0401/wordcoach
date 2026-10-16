@@ -1,6 +1,6 @@
 {
-  "name": "Word Coach",
-  "short_name": "Word Coach",
+  "name": "Wei 的词典",
+  "short_name": "Wei 的词典",
   "description": "查词、收藏、按 FSRS 间隔复习的背单词 App",
   "id": "/wordcoach/",
   "start_url": "/wordcoach/",

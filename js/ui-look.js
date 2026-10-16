@@ -41,7 +41,7 @@ export function createLookTab(app) {
     recentList);
 
   root.append(
-    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Word ', h('i', { text: 'Coach' }))),
+    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Wei ', h('i', { text: '的词典' }))),
     searchWrap, msgEl, candEl, resultEl, recentBox);
 
   // ---------------------------------------------------------------- state

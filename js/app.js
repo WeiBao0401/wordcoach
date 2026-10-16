@@ -244,7 +244,7 @@ function onResumeSW() {
 function fatal(err) {
   const box = document.getElementById('tab-look');
   box.replaceChildren(
-    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Word ', h('i', { text: 'Coach' }))),
+    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Wei ', h('i', { text: '的词典' }))),
     h('div', { className: 'err-box big' },
       h('p', { text: '打不开本机数据：' + ((err && err.message) || err) }),
       h('p', { className: 'small', text: '上滑关掉 App 再打开。还不行的话，把这句话截图发给 Claude。' }),
