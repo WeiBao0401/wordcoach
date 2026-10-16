@@ -104,7 +104,25 @@ export function createMeTab(app) {
       row('先猜再看', '查到收藏过的词时，先想意思再看答案，并记一次复习', toggle(s.guessFirst, v => app.saveSettings({ guessFirst: v }), { label: '先猜再看' })),
       row('每天新词上限', '复习里每天最多出现几个新词', stepper),
       row('发音', app.speech.supported ? (voices.length ? `${voices.length} 个英文语音可选。` : '还没读到系统语音。') + '手机开着静音时可能没声音' : '这个浏览器不支持朗读', vsel,
-        h('div', { className: 'btn-row' }, h('button', { type: 'button', className: 'btn small-btn', on: { click: () => app.speech.speak('meticulous. She is meticulous about details.') } }, icon('speak', 'ic ic-s'), '试听'))));
+        h('div', { className: 'btn-row' }, h('button', { type: 'button', className: 'btn small-btn', on: { click: () => app.speech.speak('meticulous. She is meticulous about details.') } }, icon('speak', 'ic ic-s'), '试听'))),
+      dictRow(),
+      h('p', { className: 'group-note', text: '基础释义来自开源词典 ECDICT（MIT 协议）' }));
+  }
+
+  function dictRow() {
+    const st = app.dict.status();
+    if (st.state === 'ready') {
+      return row('离线词典', '已载入。查词时先显示基础释义，没网也能看', h('span', { className: 'set-val', text: `${st.words.toLocaleString('zh-CN')} 个词` }));
+    }
+    if (st.state === 'error') {
+      // app.js already words network failures in Chinese; anything else in English gets a plain line
+      const why = m => (/[一-鿿]/.test(String(m)) ? String(m) : '网络不通，连上网后点“重试”');
+      return row('离线词典', '没载入：' + why(st.error), h('button', { type: 'button', className: 'btn small-btn', text: '重试', on: { click: () => {
+        app.dict.load().then(() => toast('离线词典已载入'), e => toast('还是没载入：' + why((e && e.message) || e), 3000)).finally(render);
+        render();
+      } } }));
+    }
+    return row('离线词典', '查词时先显示基础释义，没网也能看', h('span', { className: 'set-val muted', text: '正在载入…' }));
   }
 
   function dataSection() {

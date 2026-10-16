@@ -1,5 +1,5 @@
 // Keep VERSION identical to VERSION in sw.js; bump both on every release.
-export const VERSION = '0.1';
+export const VERSION = '0.2';
 
 export const API_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 

@@ -9,6 +9,7 @@ class Truncated extends Error {}
 class Retryable extends Error {}
 
 const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+const NETWORK_MSG = '连不上百炼：网络不通，或者请求被拦截了（开着 VPN 可以关掉再试）。';
 
 // Same tolerance as server.py parse_json: strip fences, else take the first "{" .. last "}".
 export function parseJSON(text) {
@@ -48,7 +49,7 @@ function httpError(status, data, model) {
   return new AIError(`百炼返回 ${status}：${message || code || '没有详情'}`, 'http');
 }
 
-export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Math.random } = {}) {
+export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Math.random, timeouts = TIMEOUT_MS } = {}) {
   const doFetch = fetchImpl || ((...a) => fetch(...a));
 
   async function callOnce({ model, system, user, maxTokens, signal, timeoutMs, apiKey }) {
@@ -96,12 +97,17 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     return content;
   }
 
+  // A failed fetch while the phone says it is offline (airplane mode) is not retried: the dictionary
+  // fallback shows at once. Neither is a timeout on a call the screen waits for (core, zh): one 40 s
+  // wait is long enough, three would be two minutes on a connection that hangs.
   async function callWithRetry(args) {
     let last;
     for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
       try { return await callOnce(args); } catch (e) {
         if (!(e instanceof Retryable)) throw e;
         last = e;
+        if (e.message === 'network' && globalThis.navigator && navigator.onLine === false) break;
+        if (e.message === '百炼响应超时' && !args.retryTimeout) break;
         if (attempt < RETRY_DELAYS.length) await sleep(RETRY_DELAYS[attempt]);
         if (args.signal && args.signal.aborted) throw new AIError('已取消', 'abort');
       }
@@ -111,7 +117,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     if (m.startsWith('5xx:')) throw new AIError(`百炼服务出错（${m.slice(4)}），稍后再试。`, 'server');
     if (m === 'empty') throw new AIError('百炼返回了空内容，再试一次。', 'empty');
     if (m === '百炼响应超时') throw new AIError('百炼响应超时，网络可能太慢，再试一次。', 'timeout');
-    throw new AIError('连不上百炼：网络不通，或者请求被拦截了（开着 VPN 可以关掉再试）。', 'network');
+    throw new AIError(NETWORK_MSG, 'network');
   }
 
   // kind: core | lexicon | practice | zh | story
@@ -121,6 +127,12 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
     if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：到“我的”里填上，或者先打开模拟模式。', 'nokey');
     // an invisible character in the key makes fetch throw, which would look like a network problem
     if (!mock && !/^[\x21-\x7e]+$/.test(s.apiKey)) throw new AIError('百炼 API Key 格式不对：到“我的”里重新粘贴。', 'badkey');
+    // test hook (?mock=offline): every call fails the way a dropped connection does
+    if (mock && s.mockFail === 'network') {
+      await sleep(300);
+      if (signal && signal.aborted) throw new AIError('已取消', 'abort');
+      throw new AIError(NETWORK_MSG, 'network');
+    }
     const model = modelFor(kind, s.models);
     let maxTokens = BUDGET[kind] || 2000;
     let lastErr = null;
@@ -129,7 +141,8 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
       try {
         text = mock
           ? await mockReply(kind, user, { sleep, random, signal })
-          : await callWithRetry({ model, system: SYSTEM[kind], user, maxTokens, signal, timeoutMs: TIMEOUT_MS[kind] || 60000, apiKey: s.apiKey });
+          : await callWithRetry({ model, system: SYSTEM[kind], user, maxTokens, signal, timeoutMs: timeouts[kind] || 60000, apiKey: s.apiKey,
+            retryTimeout: kind !== 'core' && kind !== 'zh' });
       } catch (e) {
         if (e instanceof Truncated) {
           lastErr = e;

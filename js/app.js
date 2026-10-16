@@ -3,6 +3,7 @@ import { VERSION, DEFAULT_SETTINGS, DEFAULT_MODELS, BACKUP_REMIND_DAYS, SHRINK_R
 import { idbStore } from './db.js';
 import { createAI } from './ai.js';
 import { createWords } from './words.js';
+import { createDict } from './dict.js';
 import { createSpeech } from './speech.js';
 import { h, icon, toast } from './ui-dom.js';
 import { createEntryView } from './ui-entry.js';
@@ -13,7 +14,9 @@ import { createMeTab } from './ui-me.js';
 import { hasExtras } from './words.js';
 
 const params = new URLSearchParams(location.search);
-const mockForced = params.get('mock') === '1';
+// ?mock=offline: mock mode where every model call fails like a dropped connection (tests the dictionary fallback)
+const mockOffline = params.get('mock') === 'offline';
+const mockForced = params.get('mock') === '1' || mockOffline;
 const standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
 
 let settings = structuredClone(DEFAULT_SETTINGS);
@@ -25,8 +28,19 @@ let tab = 'look';
 const scrollPos = {};
 const views = new Set();
 
-const ai = createAI({ getSettings: () => ({ ...settings, mock: !!settings.mock || mockForced }) });
-const words = createWords({ store: idbStore, ai });
+const ai = createAI({ getSettings: () => ({ ...settings, mock: !!settings.mock || mockForced, mockFail: mockOffline ? 'network' : '' }) });
+// Offline base dictionary (SPEC 2.1 #12): same-origin files, cached by the service worker.
+// A network failure is an English TypeError on iOS ("Load failed"), so it gets a Chinese message here.
+const DICT_NET_MSG = '网络不通，连上网后点“重试”';
+const dict = createDict({
+  fetchText: async name => {
+    let res;
+    try { res = await fetch('data/' + name); } catch (e) { console.warn('dictionary fetch:', (e && e.message) || e); throw new Error(DICT_NET_MSG); }
+    if (!res.ok) throw new Error(`下载 ${name} 失败（${res.status}）`);
+    try { return await res.text(); } catch (e) { console.warn('dictionary read:', (e && e.message) || e); throw new Error(DICT_NET_MSG); }
+  },
+});
+const words = createWords({ store: idbStore, ai, dict });
 const speech = createSpeech({ getVoiceName: () => settings.voice });
 
 let look, lib, review, me;
@@ -35,7 +49,7 @@ let sheetView = null;
 const TABS = [['look', '查词', 'search'], ['lib', '词库', 'book'], ['review', '复习', 'cards'], ['me', '我的', 'me']];
 
 const app = {
-  words, speech, store: idbStore, version: VERSION,
+  words, dict, speech, store: idbStore, version: VERSION,
   settings: () => settings,
   async saveSettings(patch) {
     settings = { ...settings, ...patch, models: { ...settings.models, ...(patch.models || {}) } };
@@ -173,7 +187,8 @@ function renderBanners() {
   if (favs && (days === null || days >= BACKUP_REMIND_DAYS)) {
     add('warn', days === null ? '还没备份过。删掉主屏幕图标会丢掉全部数据。' : `已经 ${days} 天没备份了。`, '现在备份', () => me.startExport());
   }
-  if (settings.mock || mockForced) add('info', '模拟模式：返回的是假数据，不调百炼。');
+  if (mockOffline) add('info', '模拟断网：每次调用都按连不上百炼处理。');
+  else if (settings.mock || mockForced) add('info', '模拟模式：返回的是假数据，不调百炼。');
   if (updateReady) add('info', '新版本已经下载好，下次打开生效。');
   box.replaceChildren(...out);
 }
@@ -264,6 +279,19 @@ async function boot() {
     onResumeSW();
   });
   document.documentElement.dataset.ready = '1';
+  // the dictionary loads after the first paint, in small slices; views that rendered before it get the extras
+  dict.ready.then(() => {
+    for (const v of views) v.update();
+    me.onChange();
+  });
+  let dictStarted = false;
+  const startDict = () => {
+    if (dictStarted) return;
+    dictStarted = true;
+    dict.load().catch(e => { console.warn('dictionary:', (e && e.message) || e); me.onChange(); });
+  };
+  requestAnimationFrame(() => setTimeout(startDict, 60));
+  setTimeout(startDict, 1500);   // no animation frames in a background tab
 }
 
 boot();

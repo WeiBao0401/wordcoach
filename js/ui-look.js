@@ -1,10 +1,13 @@
-// 查词 tab: search box, paste, context field, three-tier result, typo / zh flows, recent lookups.
+// 查词 tab: search box with typeahead, paste, context field, three-tier result (tier 1 from the offline
+// dictionary), dictionary fallback when the model cannot be reached, typo / zh flows, recent lookups.
 import { h, icon, toast, ago, skeleton } from './ui-dom.js';
-import { createEntryView, renderZh } from './ui-entry.js';
+import { createEntryView, renderZh, dictHead, dictMeaning } from './ui-entry.js';
 import { classifyPaste, isChinese, normalizeQuery, hasExtras } from './words.js';
 
 const CTX_HINT_EN = '粘贴你看到它的原句（可选），解释会贴着这句话讲';
 const CTX_HINT_ZH = '使用场景（可选），比如“工作邮件里”“跟老板汇报”，会按场景推荐说法';
+const SUG_RE = /^[A-Za-z][A-Za-z '’.-]*$/;   // typeahead only for English letters
+const SETTINGS_CODES = ['nokey', 'badkey', 'model', 'forbidden'];
 
 export function createLookTab(app) {
   const root = document.getElementById('tab-look');
@@ -12,7 +15,8 @@ export function createLookTab(app) {
 
   // ---------------------------------------------------------------- DOM
   const qEl = h('input', { id: 'q', type: 'text', className: 'q-input', placeholder: '查英文，或输入中文找说法', autocomplete: 'off',
-    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'search', 'aria-label': '要查的词' });
+    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'search', 'aria-label': '要查的词',
+    role: 'combobox', 'aria-autocomplete': 'list', 'aria-controls': 'q-sugs', 'aria-expanded': 'false' });
   const clearBtn = h('button', { type: 'button', className: 'q-clear', 'aria-label': '清空', hidden: true }, icon('close'));
   const ctxEl = h('textarea', { id: 'ctx', className: 'ctx-input', rows: 2, placeholder: CTX_HINT_EN, enterkeyhint: 'search', 'aria-label': '原句' });
   const ctxWrap = h('div', { className: 'ctx-wrap', hidden: true }, ctxEl);
@@ -24,6 +28,9 @@ export function createLookTab(app) {
     h('div', { className: 'q-row' }, icon('search', 'ic q-ic'), qEl, clearBtn),
     ctxWrap,
     h('div', { className: 'tools-row' }, pasteBtn, ctxToggle, h('span', { className: 'spacer' }), goBtn));
+  // typeahead: floats over the page under the search card, so nothing below it moves
+  const sugEl = h('div', { className: 'sugs', id: 'q-sugs', role: 'listbox', 'aria-label': '联想词', hidden: true });
+  const searchWrap = h('div', { className: 'search-wrap' }, form, sugEl);
   const msgEl = h('div', { className: 'status', role: 'status', 'aria-live': 'polite' });
   const candEl = h('div', { className: 'cands', hidden: true });
   const resultEl = h('div', { className: 'look-result' });
@@ -35,7 +42,7 @@ export function createLookTab(app) {
 
   root.append(
     h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Word ', h('i', { text: 'Coach' }))),
-    form, msgEl, candEl, resultEl, recentBox);
+    searchWrap, msgEl, candEl, resultEl, recentBox);
 
   // ---------------------------------------------------------------- state
   let view = null;          // EntryView on screen
@@ -94,7 +101,23 @@ export function createLookTab(app) {
     app.scrollTop();
   }
 
-  function loadingCard(q) {
+  // Tier 1: the dictionary meaning while the model works. Not for a word that comes straight back from the
+  // library, and never the meaning of a favorited word while “先猜再看” is on.
+  function tier1(q, opts) {
+    if (isChinese(q) || opts.force || app.words.resolve(q)) return null;
+    const d = app.dict.find(q);
+    if (!d) return null;
+    const known = app.words.resolve(d.word);
+    return known && known.favorited && app.settings().guessFirst ? null : d;
+  }
+
+  function loadingCard(q, d = null) {
+    if (d) {
+      return h('article', { className: 'entry loading tier1', 'aria-busy': 'true' },
+        dictHead(app, d, q), dictMeaning(d),
+        h('p', { className: 'small muted dots gen-note', text: '正在生成完整讲解' }),
+        skeleton('释义', [90, 76, 84]), skeleton('巧记', [80, 60]));
+    }
     if (isChinese(q)) {
       return h('article', { className: 'entry zh loading', 'aria-busy': 'true' },
         h('header', { className: 'entry-head zh-head' }, h('span', { className: 'label', text: '中文 → 英文' }), h('div', { className: 'zh-q', text: q }),
@@ -107,9 +130,24 @@ export function createLookTab(app) {
       skeleton('释义', [90, 76, 84, 58]), skeleton('巧记', [80, 60]));
   }
 
+  // The model failed (offline, no key, error) but the dictionary knows the word. Nothing is stored.
+  function fallbackCard(d, q, err, retry) {
+    const code = err && err.code;
+    const offline = code === 'network' || code === 'timeout';
+    return h('div', { className: 'fallback' },
+      h('div', { className: 'fb-note', role: 'status' },
+        h('p', { className: 'fb-main', text: offline ? '现在连不上百炼，先显示基础释义。' : (err && err.message) || String(err) }),
+        offline ? null : h('p', { className: 'small', text: '下面先显示基础释义。' }),
+        h('div', { className: 'btn-row' },
+          SETTINGS_CODES.includes(code) ? h('button', { type: 'button', className: 'btn primary', text: '去“我的”设置', on: { click: () => app.showTab('me') } }) : null,
+          h('button', { type: 'button', className: 'btn', on: { click: retry } }, icon('refresh', 'ic ic-s'), '再试一次'))),
+      h('article', { className: 'entry tier1' }, dictHead(app, d, q), dictMeaning(d),
+        h('p', { className: 'small muted fb-foot', text: '这次没有留下记录，查到完整讲解后才能收藏。' })));
+  }
+
   function errorBox(err, retry) {
     const code = err && err.code;
-    const settings = ['nokey', 'badkey', 'model', 'forbidden'].includes(code);
+    const settings = SETTINGS_CODES.includes(code);
     return h('div', { className: 'err-box big' },
       h('p', { text: (err && err.message) || String(err) }),
       h('div', { className: 'btn-row' },
@@ -121,6 +159,7 @@ export function createLookTab(app) {
   async function run(rawQ, opts = {}) {
     const q = normalizeQuery(rawQ);
     if (!q) { qEl.focus(); return; }
+    hideSugs();
     qEl.value = q;
     const context = opts.context !== undefined ? String(opts.context) : ctxEl.value.trim();
     if (!opts.keepCands) clearCands();
@@ -128,15 +167,24 @@ export function createLookTab(app) {
     if (ctrl) ctrl.abort();
     ctrl = new AbortController();
     setMsg('');
-    setResult(loadingCard(q));
+    const d1 = tier1(q, opts);
+    setResult(loadingCard(q, d1));
     busy = true;
+    // right after launch the dictionary may still be loading: fill tier 1 in when it lands
+    if (!d1 && !isChinese(q) && !app.dict.loaded()) {
+      app.dict.ready.then(() => { const d = my === seq && busy ? tier1(q, opts) : null; if (d) setResult(loadingCard(q, d)); });
+    }
     let r;
     try {
       r = await app.words.lookup(q, context, { force: !!opts.force, fromCn: opts.fromCn || '', signal: ctrl.signal });
     } catch (err) {
       if (my !== seq || (err && err.code === 'abort')) return;
+      if (!isChinese(q) && !app.dict.loaded()) await app.dict.whenReady(1500);
+      if (my !== seq) return;
       busy = false;
-      setResult(errorBox(err, () => run(q, { ...opts, context })));
+      const retry = () => run(q, { ...opts, context });
+      const d = isChinese(q) ? null : app.dict.find(q);
+      setResult(d ? fallbackCard(d, q, err, retry) : errorBox(err, retry));
       return;
     }
     if (my !== seq) return;
@@ -188,6 +236,7 @@ export function createLookTab(app) {
 
   // ---------------------------------------------------------------- paste
   function handlePaste(text) {
+    hideSugs();
     const c = classifyPaste(text);
     if (c.type === 'empty') { setMsg('剪贴板是空的。先在别处复制一个词或一句话。', 'warn'); return; }
     if (c.type === 'toolong') { setMsg('中文请控制在 60 个字以内。', 'warn'); return; }
@@ -212,6 +261,7 @@ export function createLookTab(app) {
   }
 
   pasteBtn.addEventListener('click', () => {
+    hideSugs();
     // readText must be called directly inside the tap, or iOS refuses
     if (!navigator.clipboard || !navigator.clipboard.readText) {
       setMsg('这里不能直接读剪贴板：长按输入框，选“粘贴”。', 'warn');
@@ -229,7 +279,10 @@ export function createLookTab(app) {
     qEl.blur(); ctxEl.blur();
     run(qEl.value);
   });
-  qEl.addEventListener('input', syncCtxUI);
+  qEl.addEventListener('input', ev => {
+    syncCtxUI();
+    if (ev.isComposing) hideSugs(); else renderSugs();   // suggest() takes well under 1 ms
+  });
   ctxEl.addEventListener('input', () => { autoGrow(); syncCtxUI(); });
   ctxEl.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit')); }
@@ -240,6 +293,7 @@ export function createLookTab(app) {
     if (on) ctxEl.focus();
   });
   clearBtn.addEventListener('click', () => {
+    hideSugs();
     seq++;
     if (ctrl) ctrl.abort();
     busy = false;
@@ -247,6 +301,59 @@ export function createLookTab(app) {
     clearCtx(); clearCands(); setMsg(''); clearResult();
     qEl.focus();
   });
+
+  // ---------------------------------------------------------------- typeahead
+  // Up to 8 dictionary words for what is being typed. It floats (no layout shift), keeps the keyboard up
+  // while a row is tapped, and goes away on blur, Escape, a lookup or the paste button.
+  let blurTimer = 0;
+  function hideSugs() {
+    if (sugEl.hidden) return;
+    sugEl.hidden = true;
+    sugEl.replaceChildren();
+    qEl.setAttribute('aria-expanded', 'false');
+  }
+  function renderSugs() {
+    const v = qEl.value.replace(/^\s+/, '');
+    const list = document.activeElement === qEl && v.length >= 2 && v.length <= 40 && SUG_RE.test(v) ? app.dict.suggest(v, 8) : [];
+    if (!list.length) { hideSugs(); return; }
+    // with “先猜再看” on, a favorited word's meaning would give the answer away before the guess
+    const guess = app.settings().guessFirst;
+    sugEl.replaceChildren(...list.map(s => {
+      const fav = guess && !!(app.words.resolve(s.word) || {}).favorited;
+      return h('button', { type: 'button', className: 'sug', role: 'option', on: { click: () => pickSug(s.word) } },
+        h('span', { className: 'w', lang: 'en', text: s.word }),
+        s.via ? h('span', { className: 'tag', text: `“${s.via}”的原形` }) : null,
+        h('span', { className: 'b', text: fav ? '已收藏' : s.cn }));
+    }));
+    sugEl.hidden = false;
+    sugEl.scrollTop = 0;
+    qEl.setAttribute('aria-expanded', 'true');
+    fitSugs();
+  }
+  // as tall as the space between the search card and the keyboard (or the tab bar); the rest scrolls inside
+  function fitSugs() {
+    if (sugEl.hidden) return;
+    const vv = window.visualViewport;
+    let bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const bar = document.getElementById('tabbar');
+    const barTop = bar ? bar.getBoundingClientRect().top : 0;
+    if (barTop > 0 && barTop < bottom) bottom = barTop;
+    sugEl.style.maxHeight = Math.max(132, Math.floor(bottom - form.getBoundingClientRect().bottom - 16)) + 'px';
+  }
+  function pickSug(word) {
+    hideSugs();
+    qEl.blur();
+    run(word);
+  }
+  sugEl.addEventListener('mousedown', ev => ev.preventDefault());   // the input keeps focus until the tap lands
+  qEl.addEventListener('compositionstart', hideSugs);
+  qEl.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !sugEl.hidden) { ev.preventDefault(); hideSugs(); } });
+  qEl.addEventListener('blur', () => {
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(() => { if (document.activeElement !== qEl) hideSugs(); }, 200);
+  });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fitSugs);
+  window.addEventListener('scroll', fitSugs, { passive: true });
 
   // ---------------------------------------------------------------- recent
   let recentTimer = 0;

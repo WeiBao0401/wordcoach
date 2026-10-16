@@ -4,6 +4,7 @@
 import { h, icon, marked, skeleton, toast, ymd, md, localYmd } from './ui-dom.js';
 import { hasLexicon, hasPractice, lookupEvents, relookups } from './words.js';
 import { endOfDay } from './fsrs.js';
+import { TAG_CN } from './dict.js';
 
 const ORDER = ['notice', 'head', 'cn', 'ctx', 'guess', 'ns', 'senses', 'mnemo', 'roots', 'quiz', 'coll', 'syn',
   'reading', 'family', 'ant', 'conf', 'usage', 'err', 'note', 'foot', 'log'];
@@ -14,6 +15,53 @@ const sig = (...parts) => JSON.stringify(parts);
 
 export function sayBtn(app, text, label = '朗读') {
   return h('button', { type: 'button', className: 'say', 'aria-label': label, on: { click: ev => { ev.stopPropagation(); app.speech.speak(text); } } }, icon('speak'));
+}
+
+// ---------------------------------------------------------------- offline dictionary bits
+// The dictionary entry for a word page: exact headword only, so a page for "went" never shows "go"'s phonetic.
+export const dictFor = (app, e) => (app.dict && e && e.headword ? app.dict.get(e.headword) : null);
+const dictSig = d => (d ? [d.word, d.phonetic, d.collins, d.oxford, d.tags.join()] : null);
+
+// Collins stars, Oxford 3000 and exam tags as one muted line (plain text: in this app bordered pills are buttons).
+export function dictChips(d) {
+  if (!d) return null;
+  const marks = [];
+  if (d.collins) marks.push('柯林斯 ' + '★'.repeat(d.collins));
+  if (d.oxford) marks.push('牛津 3000');
+  for (const t of d.tags) if (TAG_CN[t]) marks.push(TAG_CN[t]);
+  // thin spaces around the dot: abandon's eight marks still fit on one line at phone width
+  return marks.length ? h('div', { className: 'dchips', 'aria-label': '词典标记', text: marks.join('\u2009·\u2009') }) : null;
+}
+
+// ECDICT writes stress as ' and , (secondary), length as :, and schwa as the Cyrillic ә. Shown with the IPA
+// marks the model uses; display only, the vowels stay ECDICT's (go /gou/). A comma before a space or a
+// hyphen separates two pronunciations ("'eibrәhæm, -hәm") and stays a comma.
+export const ipaLook = s => String(s ?? '').replace(/ә/g, 'ə').replace(/ε/g, 'ɛ').replace(/'/g, 'ˈ')
+  .replace(/,(?=[^\s-])/g, 'ˌ').replace(/:/g, 'ː');
+
+// The entry's own phonetic; for Youdao imports without one, the dictionary's (shown, never saved).
+export function phoneticNode(e, d, tag = 'span') {
+  if (e.phonetic) return h(tag, { className: 'ipa', text: e.phonetic });
+  if (d && d.phonetic) return h(tag, { className: 'ipa', title: '来自离线词典', text: `/${ipaLook(d.phonetic)}/` });
+  return null;
+}
+
+// Tier 1 of a lookup, and the fallback when the model cannot be reached: the dictionary's word, phonetic,
+// marks and short meaning, labeled as the basic meaning.
+export function dictHead(app, d, query) {
+  const via = d.via && d.via.toLowerCase() !== d.word.toLowerCase() ? d.via : '';
+  return h('header', { className: 'entry-head' },
+    h('div', { className: 'hw-line' }, headwordNode({ headword: d.word }),
+      h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: () => app.speech.speak(d.word) } }, icon('speak'))),
+    h('div', { className: 'meta' },
+      d.phonetic ? h('span', { className: 'ipa', text: `/${ipaLook(d.phonetic)}/` }) : null,
+      via ? h('span', { className: 'small muted', text: `“${via}”的原形` }) : null),
+    dictChips(d));
+}
+export function dictMeaning(d) {
+  return h('section', { className: 'sec dict-sec' },
+    h('h3', { className: 'label', text: '基础释义 · 离线词典' }),
+    h('p', { className: 'dict-cn', text: d.cn }));
 }
 
 export function headwordNode(e, { kept = false, className = 'hw' } = {}) {
@@ -67,16 +115,18 @@ export function createEntryView(app, { where = 'look' } = {}) {
     },
     head(e, f) {
       const rl = relookups(e).length;
-      return [sig(e.headword, e.syllables, e.phonetic, e.senses && e.senses[0] && e.senses[0].pos, e.level, e.kind, !!e.favorited, rl, e.brief_cn, f.guess), () => {
+      const d = dictFor(app, e);
+      return [sig(e.headword, e.syllables, e.phonetic, e.senses && e.senses[0] && e.senses[0].pos, e.level, e.kind, !!e.favorited, rl, e.brief_cn, f.guess, dictSig(d)), () => {
         const fav = !!e.favorited;
         const labels = [e.senses && e.senses[0] && e.senses[0].pos, e.level, e.kind && e.kind !== 'word' ? String(e.kind).replace('_', ' ') : ''].filter(Boolean).join(' · ');
         return h('header', { className: 'entry-head' },
           h('div', { className: 'hw-line' }, headwordNode(e, { kept: fav }),
             h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: () => app.speech.speak(e.headword) } }, icon('speak'))),
           h('div', { className: 'meta' },
-            e.phonetic ? h('span', { className: 'ipa', text: e.phonetic }) : null,
+            phoneticNode(e, d),
             labels ? h('span', { className: 'label', text: labels }) : null,
             rl && !f.guess ? h('span', { className: 'relook', text: `收藏后又查了 ${rl} 次` }) : null),
+          dictChips(d),
           f.guess ? null : h('div', { className: 'brief', text: e.brief_cn || '' }),
           f.guess ? null : h('div', { className: 'head-actions' },
             h('button', { type: 'button', className: 'fav' + (fav ? ' on' : ''), 'aria-pressed': String(fav),

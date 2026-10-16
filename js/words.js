@@ -162,7 +162,8 @@ function interest(e) {
   return last > fav ? last : fav;
 }
 
-export function createWords({ store, ai, now = () => new Date(), hash = zhKey }) {
+// dict (optional): the offline dictionary (dict.js); its lemma table maps "went" to an existing "go" entry.
+export function createWords({ store, ai, dict = null, now = () => new Date(), hash = zhKey }) {
   const entries = new Map();     // slug -> entry (in-memory mirror of the entries store)
   const aliases = new Map();     // query form (lowercase) -> slug
   const pending = new Map();     // slug -> extras job started next to the core call
@@ -177,6 +178,14 @@ export function createWords({ store, ai, now = () => new Date(), hash = zhKey })
   const remember = e => { for (const k of aliasKeys(e)) aliases.set(k, e.slug); };
   const save = e => store.putEntry(e);
   const log = rec => { Promise.resolve().then(() => store.addLog(rec)).catch(() => {}); };
+
+  // Alias table first (spellings seen before), then the slug, then the dictionary form of an inflected form.
+  function findEntry(q) {
+    const hit = entries.get(aliases.get(normalizeQuery(q).toLowerCase()) || slugify(q));
+    if (hit || !dict) return hit || null;
+    const lem = dict.lemma(q);
+    return (lem && entries.get(aliases.get(lem.toLowerCase()) || slugify(lem))) || null;
+  }
 
   async function load() {
     const list = await store.loadEntries();
@@ -231,8 +240,10 @@ export function createWords({ store, ai, now = () => new Date(), hash = zhKey })
     if (err) { log({ at, query: q, result: 'rejected-local', reason: err }); return { ok: false, message: err }; }
     if (isChinese(q)) return lookupZh(q, context, force, signal);
 
-    const cached = entries.get(aliases.get(q.toLowerCase()) || slugify(q));
-    if (cached && !force) {
+    let cached = force ? null : findEntry(q);
+    // a lookup right after launch may beat the dictionary; wait a little so "went" still finds "go"
+    if (!cached && !force && dict && !dict.loaded() && (await dict.whenReady(800))) cached = findEntry(q);
+    if (cached) {
       const item = { at, query: q, context, cached: true };
       if (from_cn) item.from_cn = from_cn;
       recordLookup(cached, item, now());
@@ -512,7 +523,7 @@ export function createWords({ store, ai, now = () => new Date(), hash = zhKey })
     get: slug => entries.get(slug),
     all: () => [...entries.values()],
     size: () => entries.size,
-    resolve: q => entries.get(aliases.get(normalizeQuery(q).toLowerCase()) || slugify(q)) || null,
+    resolve: q => findEntry(q),
     enrichStatus: slug => ({ running: inflight.has(slug), errors: enrichErrors.get(slug) || null }),
     enriching: () => inflight.size > 0,
     inToday: (slug, newPerDay, t = now()) => { const q = reviewQueue(newPerDay, t); return [...q.due, ...q.fresh].some(e => e.slug === slug); },

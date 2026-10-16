@@ -1,6 +1,6 @@
 // 复习 tab (SPEC 2.3): FSRS flashcards. Tap to flip, four ratings, swipe left/right/up.
 import { h, icon, marked, toast, prefersReducedMotion } from './ui-dom.js';
-import { headwordNode } from './ui-entry.js';
+import { headwordNode, phoneticNode, dictFor } from './ui-entry.js';
 import { previewIntervals, endOfDay, State } from './fsrs.js';
 
 const NAMES = { 1: '忘了', 2: '模糊', 3: '记得', 4: '很熟' };
@@ -82,7 +82,7 @@ export function createReviewTab(app) {
       h('div', { className: 'swipe-tag up', text: '很熟' }),
       h('div', { className: 'hw-line center' }, headwordNode(e),
         h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: ev => { ev.stopPropagation(); app.speech.speak(e.headword); } } }, icon('speak'))),
-      e.phonetic ? h('div', { className: 'ipa', text: e.phonetic }) : null,
+      phoneticNode(e, dictFor(app, e), 'div'),
       ctx ? h('div', { className: 'quote card-quote', lang: 'en' }, h('span', { className: 'label', text: ctx.label }), h('span', {}, marked(ctx.text, e.headword))) : null,
       s.flipped ? backSide(e) : h('p', { className: 'flip-hint small muted', text: '先回想意思，点一下翻面' }));
     let actions, hint = null;
