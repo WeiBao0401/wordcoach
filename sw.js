@@ -1,6 +1,6 @@
 // Offline shell for Word Coach: cache-first, versioned.
 // Keep VERSION identical to VERSION in js/config.js and bump both on every release, or phones keep the old files.
-const VERSION = '0.2';
+const VERSION = '0.3';
 const CACHE = 'wordcoach-' + VERSION;
 // The offline dictionary (data/, about 4.6 MB, 2 MB gzipped) changes rarely, so it lives in its own cache that
 // survives app updates and is only downloaded when missing. Bump DATA_VERSION whenever a file in data/ changes.
@@ -8,8 +8,8 @@ const DATA_VERSION = '1';
 const DATA_CACHE = 'wordcoach-data-' + DATA_VERSION;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png',
-  'js/app.js', 'js/config.js', 'js/prompts.js', 'js/ai.js', 'js/db.js', 'js/words.js', 'js/fsrs.js', 'js/speech.js', 'js/dict.js',
-  'js/ui-dom.js', 'js/ui-entry.js', 'js/ui-look.js', 'js/ui-lib.js', 'js/ui-review.js', 'js/ui-me.js',
+  'js/app.js', 'js/config.js', 'js/prompts.js', 'js/ai.js', 'js/db.js', 'js/words.js', 'js/fsrs.js', 'js/speech.js', 'js/tts.js', 'js/dict.js',
+  'js/banners.js', 'js/ui-dom.js', 'js/ui-entry.js', 'js/ui-look.js', 'js/ui-lib.js', 'js/ui-review.js', 'js/ui-me.js',
   'data/dict.txt', 'data/lemma.txt', 'data/ECDICT-LICENSE.txt',
 ];
 const isData = u => u.startsWith('data/');

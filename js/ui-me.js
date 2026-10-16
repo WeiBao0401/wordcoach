@@ -1,8 +1,9 @@
-// 我的 tab (SPEC 2.4): API key, models, switches, voice, import, export backup, storage status, stats.
+// 我的 tab (SPEC 2.4): API key, models, switches, pronunciation, import, export backup, storage status, stats.
 import { h, icon, toast, ago, fmtBytes, localYmd } from './ui-dom.js';
-import { MODEL_CHOICES, VERSION } from './config.js';
+import { MODEL_CHOICES, VERSION, TTS_VOICES, TTS_MODEL } from './config.js';
 import { gzipJSON, parseExportBytes } from './db.js';
 
+const SAMPLE = 'meticulous. She is meticulous about details.';
 const MODEL_ROWS = [['core', '核心释义', '拼写判断、释义、巧记，要快'], ['extras', '扩展讲解', '搭配、同义词、阅读、小测'], ['zh', '中译英', '中文找英文说法']];
 
 export function createMeTab(app) {
@@ -94,19 +95,52 @@ export function createMeTab(app) {
     const stepper = h('div', { className: 'stepper' },
       h('button', { type: 'button', className: 'step', 'aria-label': '减少', text: '−', on: { click: step(-5) } }), num,
       h('button', { type: 'button', className: 'step', 'aria-label': '增加', text: '+', on: { click: step(5) } }));
-    const voices = app.speech.list();
-    const vsel = h('select', { className: 'select', 'aria-label': '发音' });
-    vsel.append(h('option', { value: '', text: '自动选择' }));
-    for (const v of voices) vsel.append(h('option', { value: v.name, text: `${v.name} · ${v.lang}` }));
-    vsel.value = voices.some(v => v.name === s.voice) ? s.voice : '';
-    vsel.addEventListener('change', () => app.saveSettings({ voice: vsel.value }));
     return group('查词与复习',
       row('先猜再看', '查到收藏过的词时，先想意思再看答案，并记一次复习', toggle(s.guessFirst, v => app.saveSettings({ guessFirst: v }), { label: '先猜再看' })),
       row('每天新词上限', '复习里每天最多出现几个新词', stepper),
-      row('发音', app.speech.supported ? (voices.length ? `${voices.length} 个英文语音可选。` : '还没读到系统语音。') + '手机开着静音时可能没声音' : '这个浏览器不支持朗读', vsel,
-        h('div', { className: 'btn-row' }, h('button', { type: 'button', className: 'btn small-btn', on: { click: () => app.speech.speak('meticulous. She is meticulous about details.') } }, icon('speak', 'ic ic-s'), '试听'))),
+      voiceRow(),
       dictRow(),
       h('p', { className: 'group-note', text: '基础释义来自开源词典 ECDICT（MIT 协议）' }));
+  }
+
+  // Pronunciation (SPEC 2.4): Qwen voice or system voice; the default follows whether a key is set.
+  function voiceRow() {
+    const s = app.settings();
+    const mode = app.voice.mode();
+    const canQwen = !!s.apiKey || !!s.mock || app.mockForced();
+    const choice = (val, title, sub) => h('button', { type: 'button', className: 'choice' + (mode === val ? ' on' : ''), role: 'radio',
+      'aria-checked': String(mode === val), on: { click: async () => { if (mode === val) return; app.voice.stop(); await app.saveSettings({ voiceMode: val }); render(); } } },
+    h('span', { className: 'choice-dot', 'aria-hidden': 'true' }),
+    h('span', { className: 'choice-main' }, h('span', { className: 'choice-title', text: title }), h('span', { className: 'choice-sub', text: sub })));
+    let picker;
+    if (mode === 'qwen') {
+      picker = h('select', { className: 'select', 'aria-label': '千问音色' });
+      for (const [name, cn] of TTS_VOICES) picker.append(h('option', { value: name, text: `${name} · ${cn}` }));
+      picker.value = TTS_VOICES.some(v => v[0] === s.qwenVoice) ? s.qwenVoice : TTS_VOICES[0][0];
+      picker.addEventListener('change', () => { app.voice.stop(); app.saveSettings({ qwenVoice: picker.value }); });
+    } else {
+      const voices = app.speech.list();
+      picker = h('select', { className: 'select', 'aria-label': '系统语音' });
+      picker.append(h('option', { value: '', text: voices.length ? '自动选择' : '自动选择（还没读到语音）' }));
+      for (const v of voices) picker.append(h('option', { value: v.name, text: `${v.name} · ${v.lang}` }));
+      picker.value = voices.some(v => v.name === s.voice) ? s.voice : '';
+      picker.addEventListener('change', () => app.saveSettings({ voice: picker.value }));
+    }
+    // 试听 always tries the Qwen voice again, even while it is paused after a failure
+    const test = h('button', { type: 'button', className: 'btn small-btn say-test', on: { click: ev => app.say(SAMPLE, ev.currentTarget, { retry: true }) } }, icon('speak', 'ic ic-s'), '试听');
+    let note;
+    const problem = mode === 'qwen' && canQwen ? app.voice.problem() : null;
+    if (problem) note = problem.message;
+    else if (mode === 'qwen') {
+      note = canQwen ? `按字数计费，一个词不到 0.001 元；听过的存在手机里，再听不花钱${audioCount ? `（已存 ${audioCount} 段）` : ''}。Key 要开通 ${TTS_MODEL}。`
+        : '还没填百炼 Key，现在先用系统语音。';
+    } else note = app.speech.supported ? '' : '这个浏览器不支持系统语音。';
+    return row('发音', null, null, h('div', { className: 'voice-box' },
+      h('div', { className: 'choices', role: 'radiogroup', 'aria-label': '发音' },
+        choice('qwen', '千问语音', '静音也能播，音质好，花费很少'),
+        choice('system', '系统语音', '免费，静音时没声音')),
+      h('div', { className: 'voice-pick' }, picker, test),
+      note ? h('p', { className: 'set-sub', text: note }) : null));
   }
 
   function dictRow() {
@@ -152,7 +186,7 @@ export function createMeTab(app) {
       h('button', { type: 'button', className: 'btn wide', text: '导入文件', on: { click: () => fileIn.click() } }));
     if (importState) importBox.append(importCard());
     return group('数据',
-      row('备份', le ? `上次：${ago(le.at)}（${le.count} 个收藏）` : '还没备份过。删掉主屏幕图标会删掉全部数据', null, exportBox),
+      row('备份', le ? `上次备份：${ago(le.at)}（${le.count} 个收藏）` : '上次备份：还没有', null, exportBox),
       row('导入', 'Mac 导出的 wordcoach-export 文件或手机备份（.json / .json.gz），合并，不删除任何东西', null, importBox),
       row('存储', storageText, null),
       row('统计', `词库 ${st.library}（新词 ${st.fresh} · 学习中 ${st.learning} · 已掌握 ${st.mastered}）· 最近查过 ${st.cache} · 中译英 ${st.zh} · 复习记录 ${st.reviews} · 查询日志 ${logCount}`, null),
@@ -221,7 +255,7 @@ export function createMeTab(app) {
   }
   async function exported(how) {
     if (!prepared) return;
-    // the snapshot time, not the share time: the 7-day reminder follows the age of the data in the file
+    // the snapshot time, not the share time: “上次备份” and the shrink check follow the data in the file
     await app.recordExport({ at: prepared.at, count: prepared.count, total: prepared.total });
     toast(how === 'share' ? '备份好了' : '记下了这次备份');
     prepared = null;
@@ -288,6 +322,7 @@ export function createMeTab(app) {
   // ---------------------------------------------------------------- storage + render
   let storageText = '检查中…';
   let logCount = 0;
+  let audioCount = 0;
   async function refreshStorage() {
     const parts = [];
     try {
@@ -299,6 +334,7 @@ export function createMeTab(app) {
     } catch (e) { parts.push('读不到存储状态'); }
     storageText = parts.join(' · ') || '这个浏览器不提供存储状态';
     try { logCount = await app.store.countLog(); } catch (e) { /* ignore */ }
+    try { audioCount = await app.store.countAudio(); } catch (e) { /* ignore */ }
   }
 
   function render() {
@@ -316,7 +352,6 @@ export function createMeTab(app) {
       clearTimeout(changeTimer);
       changeTimer = setTimeout(() => { if (app.currentTab() === 'me' && !(importState && importState.busy) && !typing()) render(); }, 200);
     },
-    startExport() { app.showTab('me'); prepare(); },   // always fresh data
     // something on this tab would be lost by an automatic reload
     holding: () => !!prepared || preparing || !!(importState && (importState.data || importState.busy)),
   };

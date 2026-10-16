@@ -6,5 +6,6 @@ Personal English vocabulary web app for iPhone (Home Screen web app). Look up wo
 - `sw.js`: offline shell cache; bump `VERSION` here and in `js/config.js` on every release
 - `check/`: device diagnostic page
 - `data/`: offline base dictionary trimmed from [ECDICT](https://github.com/skywind3000/ECDICT) (MIT, see `data/ECDICT-LICENSE.txt`). Public word list only, no personal data.
+- Pronunciation: Qwen TTS (`qwen3-tts-flash`) played through one shared `<audio>` element, so it sounds with the ringer on silent; clips are cached on the phone (IndexedDB). The system voice (Web Speech) is the free option and the fallback.
 - The API key is entered on the device and never stored in this repo. Word data lives only on the phone.
 - FSRS formulas ported from [ts-fsrs](https://github.com/open-spaced-repetition/ts-fsrs) (MIT).

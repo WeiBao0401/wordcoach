@@ -1,10 +1,12 @@
 // Boot: settings, data, tabs, banners, badge, service worker.
-import { VERSION, DEFAULT_SETTINGS, DEFAULT_MODELS, BACKUP_REMIND_DAYS, SHRINK_RATIO } from './config.js';
+import { VERSION, DEFAULT_SETTINGS, DEFAULT_MODELS } from './config.js';
 import { idbStore } from './db.js';
 import { createAI } from './ai.js';
 import { createWords } from './words.js';
 import { createDict } from './dict.js';
 import { createSpeech } from './speech.js';
+import { createTTS, createPlayer, createVoice } from './tts.js';
+import { bannerSpecs, shrinkState } from './banners.js';
 import { h, icon, toast } from './ui-dom.js';
 import { createEntryView } from './ui-entry.js';
 import { createLookTab } from './ui-look.js';
@@ -28,7 +30,8 @@ let tab = 'look';
 const scrollPos = {};
 const views = new Set();
 
-const ai = createAI({ getSettings: () => ({ ...settings, mock: !!settings.mock || mockForced, mockFail: mockOffline ? 'network' : '' }) });
+const liveSettings = () => ({ ...settings, mock: !!settings.mock || mockForced, mockFail: mockOffline ? 'network' : '' });
+const ai = createAI({ getSettings: liveSettings });
 // Offline base dictionary (SPEC 2.1 #12): same-origin files, cached by the service worker.
 // A network failure is an English TypeError on iOS ("Load failed"), so it gets a Chinese message here.
 const DICT_NET_MSG = '网络不通，连上网后点“重试”';
@@ -42,6 +45,11 @@ const dict = createDict({
 });
 const words = createWords({ store: idbStore, ai, dict });
 const speech = createSpeech({ getVoiceName: () => settings.voice });
+// Pronunciation (SPEC 2.1 #11): Qwen voice through one shared <audio> element (sounds on silent), clips cached in
+// IndexedDB; the system voice is the free choice and the fallback.
+const tts = createTTS({ getSettings: liveSettings, store: idbStore });
+const voice = createVoice({ speech, tts, player: createPlayer(), getSettings: liveSettings, notify: msg => toast(msg, 3500),
+  onProblem: () => { if (me) me.onChange(); } });
 
 let look, lib, review, me;
 let sheetView = null;
@@ -49,7 +57,8 @@ let sheetView = null;
 const TABS = [['look', '查词', 'search'], ['lib', '词库', 'book'], ['review', '复习', 'cards'], ['me', '我的', 'me']];
 
 const app = {
-  words, dict, speech, store: idbStore, version: VERSION,
+  words, dict, speech, tts, voice, store: idbStore, version: VERSION,
+  say: (text, button, opts) => voice.say(text, button, opts),
   settings: () => settings,
   async saveSettings(patch) {
     settings = { ...settings, ...patch, models: { ...settings.models, ...(patch.models || {}) } };
@@ -109,6 +118,7 @@ function buildTabbar() {
 function showTab(t, { force = false } = {}) {
   if (!TABS.some(x => x[0] === t)) return;
   if (t === tab && !force) return;
+  voice.stop();
   scrollPos[tab] = window.scrollY;
   if (tab === 'lib' && lib) lib.hide();
   tab = t;
@@ -162,6 +172,7 @@ function openSheet(slug) {
 }
 function closeSheet() {
   if (!sheetView) return;
+  voice.stop();
   views.delete(sheetView);
   sheetView.destroy();
   sheetView = null;
@@ -172,25 +183,16 @@ function closeSheet() {
 
 // ---------------------------------------------------------------- banners, badge
 function checkShrink() {
-  const lib = words.favorites().length;
-  shrink = lastExport && lastExport.count > 0 && lib < lastExport.count * SHRINK_RATIO ? { now: lib, then: lastExport.count } : null;
+  shrink = shrinkState(words.favorites().length, lastExport);
 }
+// No backup reminder here any more (SPEC 2.4): only the red warnings, the mock-mode notes and the update note.
 function renderBanners() {
   const box = document.getElementById('banners');
-  const out = [];
-  const add = (kind, text, btn, fn) => out.push(h('div', { className: 'banner ' + kind, role: kind === 'fail' ? 'alert' : 'status' },
-    h('span', { className: 'banner-text', text }), btn ? h('button', { type: 'button', className: 'banner-btn', text: btn, on: { click: fn } }) : null));
-  if (!standalone) add('fail', '现在是在 Safari 标签页里：这里的数据和主屏幕 App 是两份。请从主屏幕图标打开。');
-  if (shrink) add('fail', `数据可能丢了：词库现在 ${shrink.now} 个词，上次备份时有 ${shrink.then} 个。请从备份恢复。`, '去恢复', () => showTab('me'));
-  const favs = words.favorites().length;
-  const days = lastExport ? Math.floor((Date.now() - new Date(lastExport.at)) / 864e5) : null;
-  if (favs && (days === null || days >= BACKUP_REMIND_DAYS)) {
-    add('warn', days === null ? '还没备份过。删掉主屏幕图标会丢掉全部数据。' : `已经 ${days} 天没备份了。`, '现在备份', () => me.startExport());
-  }
-  if (mockOffline) add('info', '模拟断网：每次调用都按连不上百炼处理。');
-  else if (settings.mock || mockForced) add('info', '模拟模式：返回的是假数据，不调百炼。');
-  if (updateReady) add('info', '新版本已经下载好，下次打开生效。');
-  box.replaceChildren(...out);
+  const actions = { restore: () => showTab('me') };
+  box.replaceChildren(...bannerSpecs({ standalone, shrink, mockOffline, mock: !!settings.mock || mockForced, updateReady }).map(b =>
+    h('div', { className: 'banner ' + b.kind, role: b.kind === 'fail' ? 'alert' : 'status' },
+      h('span', { className: 'banner-text', text: b.text }),
+      b.btn ? h('button', { type: 'button', className: 'banner-btn', text: b.btn, on: { click: actions[b.action] } }) : null)));
 }
 
 function updateBadge() {
@@ -271,8 +273,10 @@ async function boot() {
   updateBadge();
   showTab('look', { force: true });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  speech.onVoices(() => me.onChange());   // iOS lists the system voices a moment after launch
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible') { voice.stop(); return; }
+    voice.clearProblem();   // back in the app: the next tap tries the Qwen voice again
     updateBadge();
     renderBanners();
     review.onChange();

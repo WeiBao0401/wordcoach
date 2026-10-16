@@ -1,6 +1,6 @@
-// IndexedDB "wordcoach" v1 + import/export. Nothing here touches indexedDB at import time,
-// so the pure helpers (merge, export format, gzip) can be tested in Node.
-import { DB_NAME, DB_VERSION, DB_TIMEOUT_MS, LOG_CAP } from './config.js';
+// IndexedDB "wordcoach" v1 (the words) and "wordcoach-audio" v1 (Qwen voice clips) + import/export.
+// Nothing here touches indexedDB at import time, so the pure helpers (merge, export format, gzip) can be tested in Node.
+import { DB_NAME, DB_VERSION, AUDIO_DB_NAME, AUDIO_DB_VERSION, DB_TIMEOUT_MS, LOG_CAP } from './config.js';
 import { fromSM2, newCard } from './fsrs.js';
 import { CORE_KEYS } from './prompts.js';
 
@@ -9,36 +9,54 @@ export const EXPORT_FORMAT = 'wordcoach-export';
 // ---------------------------------------------------------------- IndexedDB with timeouts
 // iOS 26 can stall IndexedDB requests forever; every operation gets a timeout, then one retry on a fresh connection.
 
-let dbPromise = null;
+// The word database: creates only the stores that are missing (same as v0.1, v0.2).
+export function upgradeDB(db) {
+  if (!db.objectStoreNames.contains('entries')) db.createObjectStore('entries', { keyPath: 'slug' });
+  if (!db.objectStoreNames.contains('zh')) db.createObjectStore('zh', { keyPath: 'key' });
+  if (!db.objectStoreNames.contains('log')) db.createObjectStore('log', { autoIncrement: true });
+  if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+}
+// The clip database: {key, voice, text, type, bytes: ArrayBuffer, size, used, at}, with an index for LRU trimming.
+export function upgradeAudioDB(db) {
+  if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio', { keyPath: 'key' }).createIndex('lru', ['used', 'size']);
+}
 
-function openDB() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('entries')) db.createObjectStore('entries', { keyPath: 'slug' });
-      if (!db.objectStoreNames.contains('zh')) db.createObjectStore('zh', { keyPath: 'key' });
-      if (!db.objectStoreNames.contains('log')) db.createObjectStore('log', { autoIncrement: true });
-      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
-    };
+// One connection per database, opened on first use and reopened after a reset.
+function connection(name, version, upgrade) {
+  let promise = null;
+  // A database already at a higher version (written by a newer build, then rolled back) is opened at the version it
+  // has instead of failing with VersionError: the stores this build uses are all still there.
+  const attempt = (resolve, reject, withVersion) => {
+    const req = withVersion ? indexedDB.open(name, version) : indexedDB.open(name);
+    req.onupgradeneeded = () => upgrade(req.result);
     req.onsuccess = () => {
       const db = req.result;
-      db.onversionchange = () => { db.close(); dbPromise = null; };
-      db.onclose = () => { dbPromise = null; };
+      db.onversionchange = () => { db.close(); promise = null; };
+      db.onclose = () => { promise = null; };
       resolve(db);
     };
-    req.onerror = () => { dbPromise = null; reject(req.error); };
-    req.onblocked = () => { dbPromise = null; reject(new Error('数据库被另一个窗口占用了')); };
-  });
-  return dbPromise;
+    req.onerror = () => {
+      const err = req.error;
+      if (withVersion && err && err.name === 'VersionError') { attempt(resolve, reject, false); return; }
+      promise = null;
+      reject(err);
+    };
+    req.onblocked = () => { promise = null; reject(new Error('数据库被另一个窗口占用了')); };
+  };
+  return {
+    open() {
+      if (!promise) promise = new Promise((resolve, reject) => attempt(resolve, reject, true));
+      return promise;
+    },
+    reset() {
+      const p = promise;
+      promise = null;
+      if (p) p.then(db => { try { db.close(); } catch (e) { /* ignore */ } }, () => {});
+    },
+  };
 }
-
-function resetDB() {
-  const p = dbPromise;
-  dbPromise = null;
-  if (p) p.then(db => { try { db.close(); } catch (e) { /* ignore */ } }, () => {});
-}
+const wordsDB = connection(DB_NAME, DB_VERSION, upgradeDB);
+const audioDB = connection(AUDIO_DB_NAME, AUDIO_DB_VERSION, upgradeAudioDB);
 
 export class DBError extends Error {
   constructor(message) { super(message); this.name = 'DBError'; }
@@ -53,9 +71,9 @@ function withTimeout(promise, ms, onTimeout) {
 }
 
 // fn(stores) queues requests and returns a value or a function to read results after completion.
-function runOnce(storeNames, mode, fn, ms) {
+function runOnce(conn, storeNames, mode, fn, ms) {
   let tx = null;
-  const work = openDB().then(db => new Promise((resolve, reject) => {
+  const work = conn.open().then(db => new Promise((resolve, reject) => {
     tx = db.transaction(storeNames, mode);
     const stores = Object.fromEntries([].concat(storeNames).map(n => [n, tx.objectStore(n)]));
     let out;
@@ -67,21 +85,23 @@ function runOnce(storeNames, mode, fn, ms) {
   return withTimeout(work, ms, () => { try { tx && tx.abort(); } catch (e) { /* ignore */ } });
 }
 
-async function run(storeNames, mode, fn, ms = DB_TIMEOUT_MS) {
+async function runOn(conn, storeNames, mode, fn, ms = DB_TIMEOUT_MS) {
   try {
-    return await runOnce(storeNames, mode, fn, ms);
+    return await runOnce(conn, storeNames, mode, fn, ms);
   } catch (e) {
-    resetDB();
+    conn.reset();
     try {
-      return await runOnce(storeNames, mode, fn, ms);
+      return await runOnce(conn, storeNames, mode, fn, ms);
     } catch (e2) {
-      resetDB();
+      conn.reset();
       if (e2 instanceof DBError) throw new DBError('本机数据库没有响应（iOS 26 的已知问题）：上滑关掉 App 再打开。');
       throw new DBError('本机数据库出错：' + (e2 && e2.message || e2));
     }
   }
 }
 
+const run = (...a) => runOn(wordsDB, ...a);
+const runAudio = (...a) => runOn(audioDB, ...a);
 const reqResult = req => () => req.result;
 
 export const idbStore = {
@@ -97,6 +117,18 @@ export const idbStore = {
   getMeta: key => run('meta', 'readonly', s => reqResult(s.meta.get(key))),
   setMeta: (key, value) => run('meta', 'readwrite', s => { s.meta.put(value, key); }),
   countLog: () => run('log', 'readonly', s => reqResult(s.log.count())),
+  // Qwen voice clips (tts.js), in the "wordcoach-audio" database. audioIndex reads keys only (no audio bytes):
+  // [[key, used, size], ...]
+  getAudio: key => runAudio('audio', 'readonly', s => reqResult(s.audio.get(key))),
+  putAudio: rec => runAudio('audio', 'readwrite', s => { s.audio.put(rec); }),
+  deleteAudio: keys => runAudio('audio', 'readwrite', s => { for (const k of keys) s.audio.delete(k); }),
+  countAudio: () => runAudio('audio', 'readonly', s => reqResult(s.audio.count())),
+  audioIndex: () => runAudio('audio', 'readonly', s => {
+    const out = [];
+    const r = s.audio.index('lru').openKeyCursor();
+    r.onsuccess = () => { const c = r.result; if (c) { out.push([c.primaryKey, c.key[0], c.key[1]]); c.continue(); } };
+    return () => out;
+  }),
   async addLog(rec) {
     const n = await run('log', 'readwrite', s => { s.log.add(rec); return reqResult(s.log.count()); });
     if (n > LOG_CAP) {

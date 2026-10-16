@@ -81,7 +81,7 @@ export function createReviewTab(app) {
       h('div', { className: 'swipe-tag right', text: '记得' }),
       h('div', { className: 'swipe-tag up', text: '很熟' }),
       h('div', { className: 'hw-line center' }, headwordNode(e),
-        h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: ev => { ev.stopPropagation(); app.speech.speak(e.headword); } } }, icon('speak'))),
+        h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: ev => { ev.stopPropagation(); app.say(e.headword, ev.currentTarget); } } }, icon('speak'))),
       phoneticNode(e, dictFor(app, e), 'div'),
       ctx ? h('div', { className: 'quote card-quote', lang: 'en' }, h('span', { className: 'label', text: ctx.label }), h('span', {}, marked(ctx.text, e.headword))) : null,
       s.flipped ? backSide(e) : h('p', { className: 'flip-hint small muted', text: '先回想意思，点一下翻面' }));

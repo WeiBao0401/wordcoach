@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://dashscope.aliyuncs.com; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://dashscope.aliyuncs.com https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com https://dashscope-result-sh.oss-cn-shanghai.aliyuncs.com https://dashscope-result-hz.oss-cn-hangzhou.aliyuncs.com; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#E9F4EC" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0E1B15" media="(prefers-color-scheme: dark)">
@@ -150,6 +150,10 @@ body.in-session #banners{display:none}
 .speak .ic{width:18px;height:18px}
 .say{position:relative;border:0;background:none;color:var(--muted);width:30px;height:30px;padding:0;display:inline-grid;place-items:center;vertical-align:-8px}
 .say .ic{width:16px;height:16px}
+/* pronounce buttons: loading while the Qwen clip is made, playing until it ends (a second tap stops) */
+.speak.loading .ic,.say.loading .ic{opacity:.45;animation:blink 1s ease-in-out infinite}
+.speak.playing,.say.playing{color:var(--accent)}
+.speak.playing{border-color:var(--accent);background:var(--accent-soft)}
 .fav{min-height:44px;padding:0 18px;border-radius:999px;border:1.5px solid var(--ink);background:none;font-weight:650;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 .fav .ic{width:18px;height:18px}
 .fav.on{background:var(--marker);border-color:var(--marker);color:var(--marker-ink)}
@@ -352,7 +356,20 @@ textarea.note:focus{border-color:var(--accent)}
 .set-label{font-weight:650}
 .set-sub{font-size:13.5px;color:var(--muted);line-height:1.5}
 .set-right{flex:none;display:flex;align-items:center}
-.set-row>.key-edit,.set-row>.export-box,.set-row>.import-box,.set-row>.btn-row{flex-basis:100%}
+.set-row>.key-edit,.set-row>.export-box,.set-row>.import-box,.set-row>.btn-row,.set-row>.voice-box{flex-basis:100%}
+.voice-box{display:grid;gap:10px}
+.choices{display:grid;gap:8px}
+.choice{display:flex;align-items:flex-start;gap:10px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--rule);border-radius:12px;background:none;text-align:left}
+.choice.on{border-color:var(--accent);background:var(--accent-soft)}
+.choice-dot{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:1.5px solid var(--muted)}
+.choice.on .choice-dot{border:5px solid var(--accent)}
+.choice-main{display:grid;min-width:0}
+.choice-title{font-weight:650}
+.choice-sub{font-size:13.5px;color:var(--muted);line-height:1.45}
+.voice-pick{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.voice-pick .select{flex:1;min-width:0;max-width:none}
+.say-test.playing{color:var(--accent);border-color:var(--accent)}
+.say-test.loading .ic{opacity:.45;animation:blink 1s ease-in-out infinite}
 .group-note{margin:0;padding:0 14px 12px;font-size:13px;color:var(--muted)}
 .inline{display:flex;align-items:center;gap:10px}
 .key-mask{font:14px var(--mono);color:var(--muted)}

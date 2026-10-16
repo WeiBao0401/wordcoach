@@ -14,7 +14,7 @@ const list = (items, fmt) => (items && items.length ? h('ul', { className: 'plai
 const sig = (...parts) => JSON.stringify(parts);
 
 export function sayBtn(app, text, label = '朗读') {
-  return h('button', { type: 'button', className: 'say', 'aria-label': label, on: { click: ev => { ev.stopPropagation(); app.speech.speak(text); } } }, icon('speak'));
+  return h('button', { type: 'button', className: 'say', 'aria-label': label, on: { click: ev => { ev.stopPropagation(); app.say(text, ev.currentTarget); } } }, icon('speak'));
 }
 
 // ---------------------------------------------------------------- offline dictionary bits
@@ -52,7 +52,7 @@ export function dictHead(app, d, query) {
   const via = d.via && d.via.toLowerCase() !== d.word.toLowerCase() ? d.via : '';
   return h('header', { className: 'entry-head' },
     h('div', { className: 'hw-line' }, headwordNode({ headword: d.word }),
-      h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: () => app.speech.speak(d.word) } }, icon('speak'))),
+      h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: ev => app.say(d.word, ev.currentTarget) } }, icon('speak'))),
     h('div', { className: 'meta' },
       d.phonetic ? h('span', { className: 'ipa', text: `/${ipaLook(d.phonetic)}/` }) : null,
       via ? h('span', { className: 'small muted', text: `“${via}”的原形` }) : null),
@@ -121,7 +121,7 @@ export function createEntryView(app, { where = 'look' } = {}) {
         const labels = [e.senses && e.senses[0] && e.senses[0].pos, e.level, e.kind && e.kind !== 'word' ? String(e.kind).replace('_', ' ') : ''].filter(Boolean).join(' · ');
         return h('header', { className: 'entry-head' },
           h('div', { className: 'hw-line' }, headwordNode(e, { kept: fav }),
-            h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: () => app.speech.speak(e.headword) } }, icon('speak'))),
+            h('button', { type: 'button', className: 'speak', 'aria-label': '发音', on: { click: ev => app.say(e.headword, ev.currentTarget) } }, icon('speak'))),
           h('div', { className: 'meta' },
             phoneticNode(e, d),
             labels ? h('span', { className: 'label', text: labels }) : null,
