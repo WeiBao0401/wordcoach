@@ -1,4 +1,4 @@
-// Boot: settings, data, tabs, banners, badge, service worker.
+// Boot: settings, data, routes (three tabs, 我 pushed from 词库), the status line, badge, sheet, service worker.
 import { VERSION, DEFAULT_SETTINGS } from './config.js';
 import { idbStore, loadSettings } from './db.js';
 import { createAI } from './ai.js';
@@ -6,7 +6,8 @@ import { createWords } from './words.js';
 import { createDict } from './dict.js';
 import { createSpeech } from './speech.js';
 import { createTTS, createPlayer, createVoice } from './tts.js';
-import { bannerSpecs, shrinkState } from './banners.js';
+import { bannerSpecs, shrinkState, pickStatus } from './banners.js';
+import { TABS, resolveRoute, reselectAction } from './nav.js';
 import { h, icon, toast } from './ui-dom.js';
 import { createEntryView } from './ui-entry.js';
 import { createLookTab } from './ui-look.js';
@@ -26,9 +27,10 @@ let lastExport = null;      // {at, count, total}
 let shrink = null;          // {now, then} when the library shrank by 20%+ since the last export
 let updateReady = false;
 let busyCount = 0;
-let tab = 'look';
+let route = 'look';         // look | lib | review | me (me lives under the 词库 tab)
 const scrollPos = {};
 const views = new Set();
+const statusSlots = new Set();
 
 const liveSettings = () => ({ ...settings, mock: !!settings.mock || mockForced, mockFail: mockOffline ? 'network' : '' });
 const ai = createAI({ getSettings: liveSettings });
@@ -54,8 +56,6 @@ const voice = createVoice({ speech, tts, player: createPlayer(), getSettings: li
 let look, lib, review, me;
 let sheetView = null;
 
-const TABS = [['look', '查词', 'search'], ['lib', '词库', 'book'], ['review', '复习', 'cards'], ['me', '我的', 'me']];
-
 const app = {
   words, dict, speech, tts, voice, ai, store: idbStore, version: VERSION,
   say: (text, button, opts) => voice.say(text, button, opts),
@@ -66,12 +66,12 @@ const app = {
     await idbStore.setMeta('settings', settings);
   },
   mockForced: () => mockForced,
-  lookup(q, opts) { closeSheet(); showTab('look'); look.lookup(q, opts); },
+  lookup(q, opts) { closeSheet(); showRoute('look'); look.lookup(q, opts); },
   backToZh() { look.backToZh(); },
   async toggleFav(slug, on) {
     try {
       await words.favorite(slug, on);
-      toast(on ? '已收藏，进入词库和复习' : '已取消收藏，移回“最近查过”');
+      toast(on ? '已划进词库' : '已移出词库，回到“最近查过”');
     } catch (e) { toast(e.message || String(e)); }
   },
   async regen(e) {
@@ -84,57 +84,74 @@ const app = {
   },
   registerView: v => views.add(v),
   unregisterView: v => views.delete(v),
-  showTab: t => showTab(t),
-  currentTab: () => tab,
+  // 'me' (the old 我的 tab name) opens the settings page under 词库
+  showTab: t => (resolveRoute(t).name === 'me' ? app.openMe() : showRoute(t)),
+  openMe: (opts = {}) => { showRoute('me'); me.show(opts); },
+  closeMe: () => showRoute('lib'),
+  currentTab: () => resolveRoute(route).tab,
+  currentRoute: () => route,
   scrollTop: () => window.scrollTo(0, 0),
-  topInset: () => 0,
-  openSheet: slug => openSheet(slug),
+  openSheet: (slug, opts) => openSheet(slug, opts),
   updateBadge: () => updateBadge(),
-  refreshBanners: () => { checkShrink(); renderBanners(); },
+  refreshBanners: () => { checkShrink(); renderStatus(); },
+  // every tab root has one status slot under its running head; they all show the same line
+  statusSlot: el => { statusSlots.add(el); renderStatusInto(el); },
+  chrome: () => chrome(),
   lastExport: () => lastExport,
   async recordExport({ at = new Date().toISOString(), count, total }) {
     lastExport = { at, count, total };
     await idbStore.setMeta('lastExport', lastExport);
     checkShrink();
-    renderBanners();
+    renderStatus();
   },
   busy: d => { busyCount = Math.max(0, busyCount + d); },
 };
 
-// ---------------------------------------------------------------- tabs
+// ---------------------------------------------------------------- routes and the tab bar
 const tabbar = document.getElementById('tabbar');
 const tabButtons = {};
 function buildTabbar() {
   tabbar.replaceChildren();
+  const lit = resolveRoute(route).tab;
   for (const [k, label, ic] of TABS) {
-    const b = h('button', { type: 'button', className: 'tb' + (k === tab ? ' on' : ''), 'aria-label': label, dataset: { tab: k },
-      on: { click: () => (k === tab ? reselect(k) : showTab(k)) } },
-    icon(ic, 'ic tb-ic'), h('span', { className: 'tb-label', text: label }), k === 'review' ? h('span', { className: 'tb-badge', hidden: true }) : null);
-    if (k === tab) b.setAttribute('aria-current', 'page');
+    const b = h('button', { type: 'button', className: 'tb' + (k === lit ? ' on' : ''), 'aria-label': label, dataset: { tab: k },
+      on: { click: () => (k === resolveRoute(route).tab ? reselect() : showRoute(k)) } },
+    icon(ic), h('span', { className: 'tb-label', text: label }), k === 'review' ? h('span', { className: 'count', hidden: true }) : null);
+    if (k === lit) b.setAttribute('aria-current', 'page');
     tabButtons[k] = b;
     tabbar.append(b);
   }
 }
-function showTab(t, { force = false } = {}) {
-  if (!TABS.some(x => x[0] === t)) return;
-  if (t === tab && !force) return;
+function showRoute(name, { force = false } = {}) {
+  const r = resolveRoute(name);
+  if (r.name === route && !force) return;
   voice.stop();
-  scrollPos[tab] = window.scrollY;
-  if (tab === 'lib' && lib) lib.hide();
-  tab = t;
+  scrollPos[route] = window.scrollY;
+  if (route === 'lib' && lib) lib.hide();
+  route = r.name;
+  for (const s of ['look', 'lib', 'review', 'me']) document.getElementById('tab-' + s).hidden = s !== r.section;
   for (const [k] of TABS) {
-    document.getElementById('tab-' + k).hidden = k !== t;
     const b = tabButtons[k];
-    if (b) { b.classList.toggle('on', k === t); if (k === t) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
+    if (b) { b.classList.toggle('on', k === r.tab); if (k === r.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
   }
-  const mod = { look, lib, review, me }[t];
-  if (mod && mod.show) mod.show();
-  window.scrollTo(0, scrollPos[t] || 0);
+  const mod = { look, lib, review, me }[r.name];
+  if (mod && mod.show && r.name !== 'me') mod.show();
+  chrome();
+  window.scrollTo(0, scrollPos[route] || 0);
 }
-function reselect(t) {
-  if (t === 'lib' && lib.inDetail()) { lib.back(); return; }
+function reselect() {
+  const a = reselectAction(route);
+  if (a.go) { showRoute(a.go); return; }
+  if (route === 'lib' && lib.inDetail()) { lib.back(); return; }
+  if (route === 'look' && look.isPushed()) { look.back(); return; }
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (t === 'look') look.focus();
+  if (route === 'look') look.focus();
+}
+// A pushed word page brings its own action bar, so the tab bar steps aside; so it does during a review round.
+function chrome() {
+  const pushed = (route === 'look' && look && look.isPushed()) || (route === 'lib' && lib && lib.isPushed());
+  document.body.classList.toggle('pushed', !!pushed);
+  document.body.classList.toggle('in-session', !!(route === 'review' && review && review.inSession()));
 }
 
 // ---------------------------------------------------------------- live updates
@@ -153,16 +170,15 @@ words.onChange(({ slug }) => {
   }, 50);
 });
 
-// ---------------------------------------------------------------- sheet (full entry from a flashcard)
+// ---------------------------------------------------------------- sheet (the full entry from a flashcard)
+// A pushed page with ‹ 复习 and the round's position on the right; back returns to the same card's back face.
 const sheet = document.getElementById('sheet');
-function openSheet(slug) {
+function openSheet(slug, { session = '' } = {}) {
   const e = words.get(slug);
   if (!e) return;
   closeSheet();
-  sheetView = createEntryView(app, { where: 'sheet' });
-  sheet.replaceChildren(
-    h('div', { className: 'sheet-bar' }, h('button', { type: 'button', className: 'back', text: '完成', on: { click: closeSheet } })),
-    sheetView.el);
+  sheetView = createEntryView(app, { where: 'sheet', back: { label: '复习', onClick: closeSheet }, session, scrollRoot: sheet });
+  sheet.replaceChildren(sheetView.el);
   views.add(sheetView);
   sheetView.show(e, {});
   sheet.hidden = false;
@@ -181,23 +197,29 @@ function closeSheet() {
   document.body.classList.remove('sheet-open');
 }
 
-// ---------------------------------------------------------------- banners, badge
+// ---------------------------------------------------------------- status line, badge
 function checkShrink() {
   shrink = shrinkState(words.favorites().length, lastExport);
 }
-// No backup reminder here any more (SPEC 2.4): only the red warnings, the mock-mode notes and the update note.
-function renderBanners() {
-  const box = document.getElementById('banners');
-  const actions = { restore: () => showTab('me') };
-  box.replaceChildren(...bannerSpecs({ standalone, shrink, mockOffline, mock: !!settings.mock || mockForced, updateReady }).map(b =>
-    h('div', { className: 'banner ' + b.kind, role: b.kind === 'fail' ? 'alert' : 'status' },
-      h('span', { className: 'banner-text', text: b.text }),
-      b.btn ? h('button', { type: 'button', className: 'banner-btn', text: b.btn, on: { click: actions[b.action] } }) : null)));
+// One quiet line under the running head (design v2): the most important notice only (banners.js pickStatus).
+// No backup reminder here (SPEC 2.4): only the red warnings, offline, the update note and the mock modes.
+let statusNow = null;
+function renderStatus() {
+  const online = typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
+  statusNow = pickStatus(bannerSpecs({ standalone, shrink, mockOffline, mock: !!settings.mock || mockForced, updateReady, online }));
+  for (const el of statusSlots) renderStatusInto(el);
+}
+function renderStatusInto(el) {
+  const s = statusNow;
+  const actions = { restore: () => app.openMe({ open: 'import' }) };
+  el.replaceChildren(...(s ? [h('p', { className: 'status-line' + (s.danger ? ' danger' : ''), role: s.danger ? 'alert' : 'status' },
+    icon(s.icon), h('span', { text: s.text }),
+    s.btn ? h('button', { type: 'button', className: 'text-btn accent', text: s.btn, on: { click: actions[s.action] } }) : null)] : []));
 }
 
 function updateBadge() {
   const n = words.dueCount(settings.newPerDay);
-  const b = tabButtons.review && tabButtons.review.querySelector('.tb-badge');
+  const b = tabButtons.review && tabButtons.review.querySelector('.count');
   if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : String(n); }
   if (tabButtons.review) tabButtons.review.setAttribute('aria-label', n ? `复习，还有 ${n} 个` : '复习');
   try {
@@ -217,7 +239,7 @@ function isIdle() {
     !words.enriching() && !(me && me.holding());
 }
 // Stricter, for a reload while the app is in use: nothing being read either.
-const isQuiet = () => isIdle() && !(tab === 'look' && look && look.hasResult()) && !(tab === 'lib' && lib && lib.inDetail());
+const isQuiet = () => isIdle() && !(look && look.hasResult()) && !(lib && lib.inDetail());
 
 let swReg = null;
 let reloaded = false;
@@ -230,7 +252,7 @@ function registerSW() {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     // the very first install also fires this (clients.claim); only a real update reloads
     if (!hadController || reloaded) return;
-    if (isQuiet()) reloadOnce(); else { updateReady = true; renderBanners(); }
+    if (isQuiet()) reloadOnce(); else { updateReady = true; renderStatus(); }
   });
   navigator.serviceWorker.register('./sw.js', { scope: './' }).then(r => { swReg = r; }).catch(() => {});
 }
@@ -243,12 +265,11 @@ function onResumeSW() {
 // ---------------------------------------------------------------- boot
 function fatal(err) {
   const box = document.getElementById('tab-look');
-  box.replaceChildren(
-    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Wei ', h('i', { text: '的词典' }))),
-    h('div', { className: 'err-box big' },
-      h('p', { text: '打不开本机数据：' + ((err && err.message) || err) }),
-      h('p', { className: 'small', text: '上滑关掉 App 再打开。还不行的话，把这句话截图发给 Claude。' }),
-      h('div', { className: 'btn-row' }, h('button', { type: 'button', className: 'btn', text: '重新载入', on: { click: () => location.reload() } }))));
+  box.replaceChildren(h('div', { className: 'fatal' },
+    h('header', { className: 'runhead' }, h('span', { className: 'runhead-title' }, 'Wei', h('span', { className: 'sub', text: ' 的词典' }))),
+    h('p', { className: 'status-line danger', role: 'alert' }, icon('alert'), h('span', { text: '打不开本机数据：' + ((err && err.message) || err) })),
+    h('p', { className: 'small', text: '上滑关掉 App 再打开。还不行的话，把这句话截图发给 Claude。' }),
+    h('div', { className: 'btn-row' }, h('button', { type: 'button', className: 'btn', text: '重新载入', on: { click: () => location.reload() } }))));
 }
 
 async function boot() {
@@ -257,7 +278,7 @@ async function boot() {
   try {
     const loaded = loadSettings(await idbStore.getMeta('settings'));
     settings = loaded.settings;
-    // models never changed in 我的 follow DEFAULT_MODELS (SPEC 2.4); if this write fails, the next launch does it again
+    // models never changed in 我 follow DEFAULT_MODELS (SPEC 2.4); if this write fails, the next launch does it again
     if (loaded.migrated) await idbStore.setMeta('settings', settings).catch(e => console.warn('settings migration:', (e && e.message) || e));
     lastExport = (await idbStore.getMeta('lastExport')) || null;
     await words.load();
@@ -266,21 +287,23 @@ async function boot() {
     fatal(e);
     return;
   }
+  checkShrink();
   look = createLookTab(app);
   lib = createLibTab(app);
   review = createReviewTab(app);
   me = createMeTab(app);
-  checkShrink();
-  renderBanners();
+  renderStatus();
   updateBadge();
-  showTab('look', { force: true });
+  showRoute('look', { force: true });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   speech.onVoices(() => me.onChange());   // iOS lists the system voices a moment after launch
+  window.addEventListener('online', renderStatus);
+  window.addEventListener('offline', renderStatus);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') { voice.stop(); return; }
     voice.clearProblem();   // back in the app: the next tap tries the Qwen voice again
     updateBadge();
-    renderBanners();
+    renderStatus();
     review.onChange();
     onResumeSW();
   });

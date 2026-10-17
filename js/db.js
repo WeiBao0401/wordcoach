@@ -160,7 +160,11 @@ export function loadSettings(saved) {
   const models = chosen ? { ...DEFAULT_MODELS, ...kept } : { ...DEFAULT_MODELS };
   // written back when the models changed, or to record modelsChosen on settings saved before it existed
   const migrated = !hasFlag || keys.some(k => stored[k] !== models[k]);
-  return { settings: { ...base, ...saved, modelsChosen: chosen, models }, migrated };
+  // new-word limit: the old default 30 becomes 10 once, unless it was picked in 我 (Wei agreed 10-16)
+  let newPerDay = saved.newPerDay;
+  const npdOld = newPerDay === 30 && saved.newPerDayChosen !== true;
+  if (npdOld) newPerDay = base.newPerDay;
+  return { settings: { ...base, ...saved, modelsChosen: chosen, models, ...(newPerDay !== undefined ? { newPerDay } : {}) }, migrated: migrated || npdOld };
 }
 
 // ---------------------------------------------------------------- import / export (pure)

@@ -1,11 +1,14 @@
-// 查词 tab: search box with typeahead, paste, context field, three-tier result (tier 1 from the offline
-// dictionary), dictionary fallback when the model cannot be reached, typo / zh flows, recent lookups.
-import { h, icon, toast, ago, skeleton } from './ui-dom.js';
-import { createEntryView, renderZh, dictHead, dictMeaning } from './ui-entry.js';
+// 查词 tab (design v2 4.1): one empty headword line near the optical centre; on focus it rises so the typeahead rows
+// sit above the keyboard. 粘贴 and 加原句 are text buttons; 最近查过 is folded at the bottom.
+// A lookup pushes a word page (‹ 查词): three tiers (tier 1 from the offline dictionary), the dictionary fallback
+// when the model cannot be reached, typo / invalid messages back on the line, Chinese -> English options.
+import { h, icon, toast, skBars } from './ui-dom.js';
+import { createEntryView, renderZh, dictHead, pageShell, headwordNode, skSenses } from './ui-entry.js';
 import { classifyPaste, isChinese, normalizeQuery, hasExtras } from './words.js';
+import { marked } from './ui-dom.js';
 
-const CTX_HINT_EN = '粘贴你看到它的原句（可选），解释会贴着这句话讲';
-const CTX_HINT_ZH = '使用场景（可选），比如“工作邮件里”“跟老板汇报”，会按场景推荐说法';
+const CTX_HINT_EN = '粘贴你看到它的原句，解释会贴着这句话讲';
+const CTX_HINT_ZH = '使用场景，比如“工作邮件里”“跟老板汇报”';
 const SUG_RE = /^[A-Za-z][A-Za-z '’.-]*$/;   // typeahead only for English letters
 const SETTINGS_CODES = ['nokey', 'badkey', 'model', 'forbidden', 'truncated'];
 
@@ -13,92 +16,168 @@ export function createLookTab(app) {
   const root = document.getElementById('tab-look');
   root.replaceChildren();
 
-  // ---------------------------------------------------------------- DOM
-  const qEl = h('input', { id: 'q', type: 'text', className: 'q-input', placeholder: '查英文，或输入中文找说法', autocomplete: 'off',
-    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'search', 'aria-label': '要查的词',
+  // ---------------------------------------------------------------- home DOM
+  const cancelBtn = h('button', { type: 'button', className: 'text-btn accent cancel', text: '取消' });
+  const statusSlot = h('div', { className: 'status-slot' });
+  const runhead = h('header', { className: 'runhead' },
+    h('span', { className: 'runhead-title' }, 'Wei', h('span', { className: 'sub', text: ' 的词典' })),
+    h('span', { className: 'runhead-meta' }, cancelBtn));
+  const qEl = h('input', { id: 'q', type: 'text', className: 'qin', placeholder: '查一个词', autocomplete: 'off',
+    autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'search', 'aria-label': '查一个词，英文或中文',
     role: 'combobox', 'aria-autocomplete': 'list', 'aria-controls': 'q-sugs', 'aria-expanded': 'false' });
-  const clearBtn = h('button', { type: 'button', className: 'q-clear', 'aria-label': '清空', hidden: true }, icon('close'));
-  const ctxEl = h('textarea', { id: 'ctx', className: 'ctx-input', rows: 2, placeholder: CTX_HINT_EN, enterkeyhint: 'search', 'aria-label': '原句' });
-  const ctxWrap = h('div', { className: 'ctx-wrap', hidden: true }, ctxEl);
-  const ctxLabel = h('span', { text: '原句' });
-  const ctxToggle = h('button', { type: 'button', className: 'tool ctx-toggle', 'aria-expanded': 'false' }, ctxLabel, icon('chevron', 'ic ic-s chev'));
-  const pasteBtn = h('button', { type: 'button', className: 'tool paste' }, icon('paste', 'ic ic-s'), '粘贴查词');
-  const goBtn = h('button', { type: 'submit', className: 'go', text: '查询' });
-  const form = h('form', { className: 'search', role: 'search', autocomplete: 'off' },
-    h('div', { className: 'q-row' }, icon('search', 'ic q-ic'), qEl, clearBtn),
-    ctxWrap,
-    h('div', { className: 'tools-row' }, pasteBtn, ctxToggle, h('span', { className: 'spacer' }), goBtn));
-  // typeahead: floats over the page under the search card, so nothing below it moves
-  const sugEl = h('div', { className: 'sugs', id: 'q-sugs', role: 'listbox', 'aria-label': '联想词', hidden: true });
-  const searchWrap = h('div', { className: 'search-wrap' }, form, sugEl);
-  const msgEl = h('div', { className: 'status', role: 'status', 'aria-live': 'polite' });
+  const clearBtn = h('button', { type: 'button', className: 'clear', 'aria-label': '清空' }, icon('close'));
+  // .inked under the field brings back the highlighter under typed text (off: design v2 decision)
+  const form = h('form', { className: 'qfield', role: 'search', autocomplete: 'off' }, qEl, clearBtn);
+  const pasteBtn = h('button', { type: 'button', className: 'text-btn paste' }, icon('paste'), '粘贴');
+  const ctxLabel = h('span', { text: '加原句' });
+  const ctxToggle = h('button', { type: 'button', className: 'text-btn ctx-toggle', 'aria-expanded': 'false' }, icon('quotePlus'), ctxLabel);
+  const actions = h('div', { className: 'look-actions' }, pasteBtn, ctxToggle);
+  const ctxEl = h('textarea', { id: 'ctx', className: 'ctx-in', rows: 2, placeholder: CTX_HINT_EN, enterkeyhint: 'search', 'aria-label': '原句' });
+  const ctxCap = h('span', { className: 'label', text: '原句（可选）' });
+  const ctxWrap = h('label', { className: 'ctx-wrap', hidden: true }, ctxCap, ctxEl);
+  const msgEl = h('div', { className: 'look-msg', role: 'status', 'aria-live': 'polite' });
   const candEl = h('div', { className: 'cands', hidden: true });
-  const resultEl = h('div', { className: 'look-result' });
-  const recentList = h('div', { className: 'rows' });
-  const recentBox = h('section', { className: 'recent' },
-    h('h2', { className: 'sec-title', text: '最近查过' }),
-    h('p', { className: 'small muted', text: '没收藏的词留在这里。想留就点“收藏”，收藏后才进词库和复习。' }),
-    recentList);
-
-  root.append(
-    h('div', { className: 'brand' }, h('span', { className: 'mark' }, 'Wei ', h('i', { text: '的词典' }))),
-    searchWrap, msgEl, candEl, resultEl, recentBox);
+  const sugEl = h('div', { className: 'sugs', id: 'q-sugs', role: 'listbox', 'aria-label': '联想词', hidden: true });
+  const entryBlock = h('section', { className: 'look-entry', 'aria-label': '查词' }, form, actions, ctxWrap, msgEl, candEl, sugEl);
+  const foldNum = h('span', { className: 'num' });
+  const foldBtn = h('button', { type: 'button', className: 'fold', 'aria-expanded': 'false', 'aria-controls': 'recent-list' },
+    h('span', {}, '最近查过 ', foldNum, ' 个'), icon('plus', 'plus'), icon('minus', 'minus'));
+  const recentList = h('div', { className: 'recent-list', id: 'recent-list' });
+  const recentBox = h('section', { className: 'recent', 'aria-label': '最近查过' }, foldBtn, recentList);
+  const stage = h('div', { className: 'look-stage' }, entryBlock, recentBox);
+  const home = h('div', { className: 'look-home boot' }, runhead, statusSlot, stage);
+  const page = h('div', { className: 'look-page', hidden: true });
+  root.append(home, page);
+  app.statusSlot(statusSlot);
+  setTimeout(() => home.classList.remove('boot'), 1000);
 
   // ---------------------------------------------------------------- state
   let view = null;          // EntryView on screen
+  let shell = null;         // the other pushed pages (loading, error, fallback, zh)
   let zhLast = null;        // last Chinese -> English result, for "回到中文"
   let seq = 0;
   let ctrl = null;
   let busy = false;
+  let recentOpen = false;
+
+  // ---------------------------------------------------------------- home state
+  function sync() {
+    const focus = document.activeElement === qEl;
+    const has = !!qEl.value;
+    const sugs = !sugEl.hidden;
+    const extra = !ctxWrap.hidden || !!msgEl.firstChild || !candEl.hidden;
+    if (focus && recentOpen) setRecent(false);
+    home.classList.toggle('focus', focus);
+    home.classList.toggle('typing', sugs);
+    home.classList.toggle('has-value', has);
+    home.classList.toggle('raised', focus || has || extra || recentOpen);
+    home.classList.toggle('recent-open', recentOpen);
+    cancelBtn.hidden = !(focus || has || extra);
+    stage.style.setProperty('--rtop', (entryBlock.offsetTop + entryBlock.offsetHeight + 20) + 'px');
+  }
+  function setRecent(on) {
+    recentOpen = on;
+    foldBtn.setAttribute('aria-expanded', String(on));
+    recentList.inert = !on;
+    sync();
+  }
 
   function setMsg(text, kind = '', extra = null) {
-    msgEl.className = 'status' + (kind ? ' ' + kind : '');
+    msgEl.className = 'look-msg' + (kind ? ' ' + kind : '');
     msgEl.replaceChildren();
-    if (text) msgEl.append(h('span', { text }));
+    if (text) msgEl.append(h('p', { text }));
     if (extra) msgEl.append(extra);
+    sync();
   }
   function syncCtxUI() {
     const zh = isChinese(qEl.value);
-    ctxLabel.textContent = zh ? '使用场景' : '原句';
+    ctxLabel.textContent = zh ? '加场景' : '加原句';
+    ctxCap.textContent = zh ? '使用场景（可选）' : '原句（可选）';
     ctxEl.placeholder = zh ? CTX_HINT_ZH : CTX_HINT_EN;
     ctxEl.setAttribute('aria-label', zh ? '使用场景' : '原句');
-    ctxToggle.classList.toggle('has', !!ctxEl.value.trim());
-    clearBtn.hidden = !qEl.value && !resultEl.firstChild;
+    ctxToggle.classList.toggle('on', !!ctxEl.value.trim());
+    clearBtn.hidden = !qEl.value;
   }
   function openCtx(on) {
     ctxWrap.hidden = !on;
     ctxToggle.setAttribute('aria-expanded', String(on));
-    ctxToggle.classList.toggle('open', on);
+    sync();
   }
   function clearCtx() { ctxEl.value = ''; ctxEl.style.height = ''; openCtx(false); syncCtxUI(); }
-  function clearCands() { candEl.hidden = true; candEl.replaceChildren(); }
+  function clearCands() { candEl.hidden = true; candEl.replaceChildren(); sync(); }
 
-  function clearResult() {
-    if (view) { app.unregisterView(view); view.destroy(); view = null; }
-    resultEl.replaceChildren();
-    recentBox.hidden = false;
-    syncCtxUI();
+  // Long words step the size down (44 -> 34 -> 28) instead of scrolling, measured with the input's own font.
+  const measure = typeof document.createElement('canvas').getContext === 'function' ? document.createElement('canvas').getContext('2d') : null;
+  function fit() {
+    qEl.classList.remove('fs-34', 'fs-28');
+    if (!measure || !qEl.value) return;
+    const cs = getComputedStyle(qEl);
+    const room = qEl.clientWidth - 4;
+    const width = fs => { measure.font = `${cs.fontWeight} ${fs}px ${cs.fontFamily}`; return measure.measureText(qEl.value).width - qEl.value.length * 0.02 * fs; };
+    if (width(44) <= room) return;
+    qEl.classList.add(width(34) > room ? 'fs-28' : 'fs-34');
   }
-  function setResult(node) {
+
+  // ---------------------------------------------------------------- pushed pages
+  function clearPage() {
     if (view) { app.unregisterView(view); view.destroy(); view = null; }
-    resultEl.replaceChildren(node);
-    recentBox.hidden = true;
+    if (shell) { shell.destroy(); shell = null; }
+    page.replaceChildren();
+  }
+  function push(node) {
+    page.replaceChildren(node);
+    if (!page.hidden) { window.scrollTo(0, 0); return; }
+    home.hidden = true;
+    page.hidden = false;
+    app.chrome();
+    window.scrollTo(0, 0);
+  }
+  // back to the line; keep: leave the query on the line (a typo message is shown there)
+  function pop({ keep = false } = {}) {
+    clearPage();
+    page.hidden = true;
+    home.hidden = false;
+    if (!keep) { qEl.value = ''; clearCands(); setMsg(''); }
+    fit();
     syncCtxUI();
+    sync();
+    app.chrome();
+    window.scrollTo(0, 0);
+  }
+  function back() {
+    seq++;
+    if (ctrl) ctrl.abort();
+    busy = false;
+    app.voice.stop();
+    pop();
+  }
+  const BACK = { label: '查词', onClick: back };
+
+  // a fixed bar for pages that are not a word yet: 发音, one primary button, 笔记 (greyed)
+  function stubBar(sh, word, primary) {
+    sh.bar.replaceChildren(h('div', { className: 'bar-main' },
+      h('button', { type: 'button', className: 'text-btn', disabled: !word, on: { click: ev => app.say(word, ev.currentTarget) } }, icon('speak'), '发音'),
+      h('button', { type: 'button', className: 'btn', disabled: !!primary.disabled, on: { click: primary.onClick || null } }, icon(primary.icon), primary.label),
+      h('button', { type: 'button', className: 'text-btn', disabled: true }, icon('note'), '笔记')));
   }
 
   function showEntry(e, opts = {}) {
-    const v = createEntryView(app, { where: 'look' });
-    setResult(v.el);
+    clearPage();
+    const v = createEntryView(app, { where: 'look', back: BACK });
     view = v;
     app.registerView(v);
     v.show(e, opts);
+    push(v.el);
     if (!hasExtras(e) || e.needs_core) app.words.enrich(e.slug).catch(() => {});
-    app.scrollTop();
   }
 
   function showZh(d) {
-    setResult(renderZh(app, d, { onPick: (en, fromCn) => run(en, { fromCn, context: '' }) }));
-    app.scrollTop();
+    clearPage();
+    shell = pageShell(app, { back: BACK });
+    shell.barEl.hidden = true;
+    shell.el.classList.add('no-bar');
+    shell.body.append(renderZh(app, d, { onPick: (en, fromCn) => run(en, { fromCn, context: '' }) }));
+    push(shell.el);
   }
 
   // Tier 1: the dictionary meaning while the model works. Not for a word that comes straight back from the
@@ -111,48 +190,49 @@ export function createLookTab(app) {
     return known && known.favorited && app.settings().guessFirst ? null : d;
   }
 
-  function loadingCard(q, d = null) {
-    if (d) {
-      return h('article', { className: 'entry loading tier1', 'aria-busy': 'true' },
-        dictHead(app, d, q), dictMeaning(d),
-        h('p', { className: 'small muted dots gen-note', text: '正在生成完整讲解' }),
-        skeleton('释义', [90, 76, 84]), skeleton('巧记', [80, 60]));
-    }
+  function loadingPage(q, d, context) {
+    clearPage();
+    shell = pageShell(app, { back: BACK });
+    const b = shell.body;
+    b.setAttribute('aria-busy', 'true');
     if (isChinese(q)) {
-      return h('article', { className: 'entry zh loading', 'aria-busy': 'true' },
-        h('header', { className: 'entry-head zh-head' }, h('span', { className: 'label', text: '中文 → 英文' }), h('div', { className: 'zh-q', text: q }),
-          h('p', { className: 'small muted dots', text: '正在找英文说法' })),
-        skeleton('选项', [70, 92, 60]), skeleton('', [84, 66]));
+      shell.barEl.hidden = true;
+      shell.el.classList.add('no-bar');
+      b.append(h('section', { className: 'ehead zh-head' }, h('p', { className: 'label', text: '中文 → 英文' }), h('h1', { className: 'zh-q', text: q })),
+        h('section', { className: 'sec' }, h('h2', { className: 'sec-h' }, '英文说法', h('span', { className: 'st', text: '正在找' })), skSenses()));
+      push(shell.el);
+      return;
     }
-    return h('article', { className: 'entry loading', 'aria-busy': 'true' },
-      h('header', { className: 'entry-head' }, h('div', { className: 'hw-line' }, h('span', { className: 'hw pending', lang: 'en', text: q })),
-        h('p', { className: 'small muted dots', text: '正在查' })),
-      skeleton('释义', [90, 76, 84, 58]), skeleton('巧记', [80, 60]));
+    b.append(d ? dictHead(app, d, { levelSkeleton: true })
+      : h('section', { className: 'ehead' }, headwordNode({ headword: q }), h('p', { className: 'hw-meta' }, h('span', { className: 'pill', 'aria-hidden': 'true' })),
+        h('div', { className: 'brief' }, skBars([46]))));
+    b.append(h('section', { className: 'sec' }, h('h2', { className: 'sec-h' }, '释义', h('span', { className: 'st', text: '正在写讲解' })), skSenses()));
+    if (context) {
+      b.append(h('section', { className: 'sec' }, h('h2', { className: 'sec-h', text: '你遇到它的地方' }),
+        h('div', { className: 'hang ctx' }, h('span', { className: 'qmark', lang: 'en', 'aria-hidden': 'true', text: '“' }),
+          h('div', {}, h('p', { className: 'quote', lang: 'en' }, marked(context, d ? d.word : q)))),
+        h('div', { className: 'ctx-note' }, skBars([96, 52]))));
+    }
+    b.append(h('section', { className: 'sec' }, h('h2', { className: 'sec-h', text: '巧记' }), h('div', { className: 'mnemo' }, skBars([94, 88, 40]))));
+    stubBar(shell, d ? d.word : q, { label: '划进词库', icon: 'pen', disabled: true });
+    push(shell.el);
   }
 
-  // The model failed (offline, no key, error) but the dictionary knows the word. Nothing is stored.
-  function fallbackCard(d, q, err, retry) {
+  // The model failed (offline, no key, error). With the dictionary's meaning when it knows the word. Nothing is stored.
+  function failPage(q, d, err, retry) {
+    clearPage();
+    shell = pageShell(app, { back: BACK });
     const code = err && err.code;
     const offline = code === 'network' || code === 'timeout';
-    return h('div', { className: 'fallback' },
-      h('div', { className: 'fb-note', role: 'status' },
-        h('p', { className: 'fb-main', text: offline ? '现在连不上百炼，先显示基础释义。' : (err && err.message) || String(err) }),
-        offline ? null : h('p', { className: 'small', text: '下面先显示基础释义。' }),
-        h('div', { className: 'btn-row' },
-          SETTINGS_CODES.includes(code) ? h('button', { type: 'button', className: 'btn primary', text: '去“我的”设置', on: { click: () => app.showTab('me') } }) : null,
-          h('button', { type: 'button', className: 'btn', on: { click: retry } }, icon('refresh', 'ic ic-s'), '再试一次'))),
-      h('article', { className: 'entry tier1' }, dictHead(app, d, q), dictMeaning(d),
-        h('p', { className: 'small muted fb-foot', text: '这次没有留下记录，查到完整讲解后才能收藏。' })));
-  }
-
-  function errorBox(err, retry) {
-    const code = err && err.code;
-    const settings = SETTINGS_CODES.includes(code);
-    return h('div', { className: 'err-box big' },
-      h('p', { text: (err && err.message) || String(err) }),
-      h('div', { className: 'btn-row' },
-        settings ? h('button', { type: 'button', className: 'btn primary', text: '去“我的”设置', on: { click: () => app.showTab('me') } }) : null,
-        h('button', { type: 'button', className: 'btn', on: { click: retry } }, icon('refresh', 'ic ic-s'), '再试一次')));
+    const msg = d && offline ? '现在连不上百炼，先显示基础释义。' : ((err && err.message) || String(err)) + (d ? ' 下面先显示基础释义。' : '');
+    const toMe = SETTINGS_CODES.includes(code) ? h('button', { type: 'button', className: 'text-btn accent', text: '去设置', on: { click: () => app.showTab('me') } }) : null;
+    shell.body.append(
+      d ? dictHead(app, d, { wrap: true }) : h('section', { className: 'ehead' }, headwordNode({ headword: q })),
+      h('div', { className: 'sec' + (d ? ' fallback' : '') },
+        h('p', { className: 'status-line err', role: 'status' }, icon(offline ? 'offline' : 'clock'), h('span', { text: msg }), toMe),
+        d ? h('p', { className: 'small fb-foot', text: '这次没有留下记录，查到完整讲解后才能收藏。' }) : null));
+    stubBar(shell, d ? d.word : (isChinese(q) ? '' : q), { label: '再试一次', icon: 'refresh', onClick: retry });
+    push(shell.el);
   }
 
   // ---------------------------------------------------------------- lookup
@@ -161,18 +241,20 @@ export function createLookTab(app) {
     if (!q) { qEl.focus(); return; }
     hideSugs();
     qEl.value = q;
+    fit();
     const context = opts.context !== undefined ? String(opts.context) : ctxEl.value.trim();
     if (!opts.keepCands) clearCands();
     const my = ++seq;
     if (ctrl) ctrl.abort();
     ctrl = new AbortController();
     setMsg('');
+    qEl.blur(); ctxEl.blur();
     const d1 = tier1(q, opts);
-    setResult(loadingCard(q, d1));
+    loadingPage(q, d1, context);
     busy = true;
     // right after launch the dictionary may still be loading: fill tier 1 in when it lands
     if (!d1 && !isChinese(q) && !app.dict.loaded()) {
-      app.dict.ready.then(() => { const d = my === seq && busy ? tier1(q, opts) : null; if (d) setResult(loadingCard(q, d)); });
+      app.dict.ready.then(() => { const d = my === seq && busy ? tier1(q, opts) : null; if (d) loadingPage(q, d, context); });
     }
     let r;
     try {
@@ -183,25 +265,24 @@ export function createLookTab(app) {
       if (my !== seq) return;
       busy = false;
       const retry = () => run(q, { ...opts, context });
-      const d = isChinese(q) ? null : app.dict.find(q);
-      setResult(d ? fallbackCard(d, q, err, retry) : errorBox(err, retry));
+      failPage(q, isChinese(q) ? null : app.dict.find(q), err, retry);
       return;
     }
     if (my !== seq) return;
     busy = false;
-    if (!r.ok) { clearResult(); setMsg(r.message, 'bad'); return; }
+    if (!r.ok) { pop({ keep: true }); setMsg(r.message, 'bad'); return; }
     if (r.mode === 'zh') {
-      if (r.found === false) { clearResult(); setMsg(r.message, 'warn'); return; }
+      if (r.found === false) { pop({ keep: true }); setMsg(r.message, 'warn'); return; }
       zhLast = r.result;
       clearCtx();
       showZh(r.result);
       return;
     }
     if (!r.found) {
-      clearResult();
+      pop({ keep: true });
       if (r.status === 'typo' && r.suggestions.length) {
         setMsg(`“${q}”可能拼错了，不会留下记录。你想查的是：`, 'warn',
-          h('span', { className: 'chips inline' }, r.suggestions.map(s => h('button', { type: 'button', className: 'chip', lang: 'en', text: s, on: { click: () => run(s, { context }) } }))));
+          h('div', { className: 'words-inline' }, r.suggestions.map(s => h('button', { type: 'button', className: 'text-btn word-btn', lang: 'en', text: s, on: { click: () => run(s, { context }) } }))));
       } else setMsg(`没认出“${q}”是英文单词或短语，不会留下记录。`, 'warn');
       return;
     }
@@ -215,7 +296,8 @@ export function createLookTab(app) {
     // also for a new spelling that maps to a favorited word (not cached)
     const guess = !!(r.entry.favorited && !opts.force && app.settings().guessFirst);
     const zhBack = opts.fromCn && zhLast && zhLast.query === opts.fromCn ? zhLast : null;
-    showEntry(r.entry, { notice, pulled, guess, zhBack });
+    // syllable dots only for a word that was already here (they never pop in when the explanation arrives)
+    showEntry(r.entry, { notice, pulled, guess, zhBack, syl: !!r.cached });
   }
 
   function openEntry(slug) {
@@ -241,8 +323,8 @@ export function createLookTab(app) {
     if (c.type === 'empty') { setMsg('剪贴板是空的。先在别处复制一个词或一句话。', 'warn'); return; }
     if (c.type === 'toolong') { setMsg('中文请控制在 60 个字以内。', 'warn'); return; }
     if (c.type === 'word') { run(c.value); return; }
-    clearResult();
     qEl.value = '';
+    fit();
     ctxEl.value = c.value;
     openCtx(true);
     autoGrow();
@@ -254,10 +336,11 @@ export function createLookTab(app) {
     }
     setMsg('');
     candEl.replaceChildren(
-      h('div', { className: 'small muted', text: '这段话里的词，点一个就贴着这句话讲：' }),
-      h('div', { className: 'chips' }, c.candidates.map(w => h('button', { type: 'button', className: 'chip', lang: 'en', text: w,
+      h('p', { className: 'small', text: '这段话里的词，点一个就贴着这句话讲：' }),
+      h('div', { className: 'words-inline' }, c.candidates.map(w => h('button', { type: 'button', className: 'text-btn word-btn', lang: 'en', text: w,
         on: { click: () => run(w, { context: c.value, keepCands: true }) } }))));
     candEl.hidden = false;
+    sync();
   }
 
   pasteBtn.addEventListener('click', () => {
@@ -268,42 +351,57 @@ export function createLookTab(app) {
       return;
     }
     navigator.clipboard.readText().then(handlePaste, () => {
-      setMsg('没读到剪贴板。点“粘贴查词”后，还要再点一下弹出的“粘贴”。也可以长按输入框粘贴。', 'warn');
+      setMsg('没读到剪贴板。点“粘贴”后，还要再点一下弹出的“粘贴”。也可以长按输入框粘贴。', 'warn');
     });
   });
 
   // ---------------------------------------------------------------- inputs
-  function autoGrow() { ctxEl.style.height = 'auto'; ctxEl.style.height = Math.min(ctxEl.scrollHeight + 2, 220) + 'px'; }
+  function autoGrow() { ctxEl.style.height = 'auto'; ctxEl.style.height = Math.min(ctxEl.scrollHeight + 2, 200) + 'px'; sync(); }
   form.addEventListener('submit', ev => {
     ev.preventDefault();
-    qEl.blur(); ctxEl.blur();
     run(qEl.value);
   });
   qEl.addEventListener('input', ev => {
     syncCtxUI();
+    fit();
     if (ev.isComposing) hideSugs(); else renderSugs();   // suggest() takes well under 1 ms
+    sync();
   });
+  qEl.addEventListener('focus', () => { sync(); renderSugs(); });
   ctxEl.addEventListener('input', () => { autoGrow(); syncCtxUI(); });
   ctxEl.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit')); }
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); run(qEl.value); }
   });
   ctxToggle.addEventListener('click', () => {
     const on = ctxWrap.hidden;
     openCtx(on);
     if (on) ctxEl.focus();
   });
+  clearBtn.addEventListener('mousedown', ev => ev.preventDefault());   // keep the keyboard up
   clearBtn.addEventListener('click', () => {
+    hideSugs();
+    qEl.value = '';
+    fit();
+    syncCtxUI();
+    qEl.focus();
+    sync();
+  });
+  cancelBtn.addEventListener('mousedown', ev => ev.preventDefault());
+  cancelBtn.addEventListener('click', () => {
     hideSugs();
     seq++;
     if (ctrl) ctrl.abort();
     busy = false;
     qEl.value = '';
-    clearCtx(); clearCands(); setMsg(''); clearResult();
-    qEl.focus();
+    fit();
+    clearCtx(); clearCands(); setMsg('');
+    qEl.blur(); ctxEl.blur();
+    sync();
   });
+  foldBtn.addEventListener('click', () => setRecent(!recentOpen));
 
   // ---------------------------------------------------------------- typeahead
-  // Up to 8 dictionary words for what is being typed. It floats (no layout shift), keeps the keyboard up
+  // Up to 8 dictionary words for what is being typed, as rows right under the line. It keeps the keyboard up
   // while a row is tapped, and goes away on blur, Escape, a lookup or the paste button.
   let blurTimer = 0;
   function hideSugs() {
@@ -311,6 +409,7 @@ export function createLookTab(app) {
     sugEl.hidden = true;
     sugEl.replaceChildren();
     qEl.setAttribute('aria-expanded', 'false');
+    sync();
   }
   function renderSugs() {
     const v = qEl.value.replace(/^\s+/, '');
@@ -318,76 +417,86 @@ export function createLookTab(app) {
     if (!list.length) { hideSugs(); return; }
     // with “先猜再看” on, a favorited word's meaning would give the answer away before the guess
     const guess = app.settings().guessFirst;
-    sugEl.replaceChildren(...list.map(s => {
-      const fav = guess && !!(app.words.resolve(s.word) || {}).favorited;
-      return h('button', { type: 'button', className: 'sug', role: 'option', on: { click: () => pickSug(s.word) } },
-        h('span', { className: 'w', lang: 'en', text: s.word }),
-        s.via ? h('span', { className: 'tag', text: `“${s.via}”的原形` }) : null,
-        h('span', { className: 'b', text: fav ? '已收藏' : s.cn }));
+    const typed = v.toLowerCase();
+    sugEl.replaceChildren(...list.map((s, i) => {
+      const known = app.words.resolve(s.word);
+      const fav = !!(known && known.favorited);
+      const w = String(s.word);
+      const pre = w.toLowerCase().startsWith(typed) ? w.slice(0, typed.length) : '';
+      const word = pre ? [h('b', { text: pre }), h('span', { className: 'rest', text: w.slice(pre.length) })] : [w];
+      return h('button', { type: 'button', className: 'word-row two', role: 'option', style: `--i:${i}`, on: { click: () => pickSug(s.word) } },
+        h('span', { className: 'w', lang: 'en' }, fav ? h('span', { className: 'marked' }, word) : word),
+        h('span', { className: 'end', text: s.via ? `“${s.via}”的原形` : fav ? '已收藏' : known ? '查过' : '' }),
+        glossNode(fav && guess ? '已收藏' : s.cn));
     }));
     sugEl.hidden = false;
     sugEl.scrollTop = 0;
     qEl.setAttribute('aria-expanded', 'true');
+    sync();
     fitSugs();
   }
-  // as tall as the space between the search card and the keyboard (or the tab bar); the rest scrolls inside
+  // the dictionary writes the part of speech first ("adj. 一丝不苟的"): set it in italic serif like the mockup
+  function glossNode(text) {
+    const m = String(text || '').match(/^((?:[a-z]+\.\s*)+)(.*)$/);
+    return h('span', { className: 'g' }, m ? [h('i', { lang: 'en', text: m[1].trim() }), m[2]] : text);
+  }
+  // as tall as the space between the line and the keyboard (or the tab bar); the rest scrolls inside
   function fitSugs() {
     if (sugEl.hidden) return;
     const vv = window.visualViewport;
     let bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
     const bar = document.getElementById('tabbar');
-    const barTop = bar ? bar.getBoundingClientRect().top : 0;
+    const barTop = bar && !document.body.classList.contains('pushed') ? bar.getBoundingClientRect().top : 0;
     if (barTop > 0 && barTop < bottom) bottom = barTop;
-    sugEl.style.maxHeight = Math.max(132, Math.floor(bottom - form.getBoundingClientRect().bottom - 16)) + 'px';
+    // the entry block may still be rising (transform), so measure from where it ends up
+    const top = stage.getBoundingClientRect().top + entryBlock.offsetTop + sugEl.offsetTop;
+    sugEl.style.maxHeight = Math.max(132, Math.floor(bottom - top - 8)) + 'px';
   }
   function pickSug(word) {
     hideSugs();
-    qEl.blur();
     run(word);
   }
   sugEl.addEventListener('mousedown', ev => ev.preventDefault());   // the input keeps focus until the tap lands
   qEl.addEventListener('compositionstart', hideSugs);
+  qEl.addEventListener('compositionend', () => { renderSugs(); });
   qEl.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !sugEl.hidden) { ev.preventDefault(); hideSugs(); } });
   qEl.addEventListener('blur', () => {
     clearTimeout(blurTimer);
-    blurTimer = setTimeout(() => { if (document.activeElement !== qEl) hideSugs(); }, 200);
+    blurTimer = setTimeout(() => { if (document.activeElement !== qEl) { hideSugs(); sync(); } }, 200);
   });
   if (window.visualViewport) window.visualViewport.addEventListener('resize', fitSugs);
-  window.addEventListener('scroll', fitSugs, { passive: true });
+  window.addEventListener('resize', () => { fit(); sync(); fitSugs(); });
 
   // ---------------------------------------------------------------- recent
   let recentTimer = 0;
   function renderRecent() {
     const items = app.words.recent(20);
-    recentList.replaceChildren();
-    if (!items.length) {
-      recentList.append(h('p', { className: 'empty', text: '查过、还没收藏的词会出现在这里。' }));
-      return;
-    }
-    for (const e of items) {
-      const hist = e.history || [];
-      const last = hist.length ? hist[hist.length - 1].at : e.created;
-      recentList.append(h('div', { className: 'rowi' },
-        h('button', { type: 'button', className: 'row-main', on: { click: () => openEntry(e.slug) } },
-          h('span', { className: 'w', lang: 'en', text: e.headword }),
-          h('span', { className: 'b', text: e.brief_cn || '' })),
-        h('span', { className: 't', text: ago(last) }),
-        h('button', { type: 'button', className: 'mini-fav', text: '收藏', 'aria-label': '收藏 ' + e.headword,
-          on: { click: () => app.toggleFav(e.slug, true) } })));
-    }
+    foldNum.textContent = String(items.length);
+    recentBox.hidden = !items.length;
+    if (!items.length && recentOpen) setRecent(false);
+    recentList.replaceChildren(...items.map((e, i) => h('div', { className: 'word-row', style: `--i:${i}` },
+      h('button', { type: 'button', className: 'wr-main', on: { click: () => openEntry(e.slug) } },
+        h('span', { className: 'w', lang: 'en', text: e.headword }),
+        h('span', { className: 'g', text: e.brief_cn || '' })),
+      h('span', { className: 'end' }, h('button', { type: 'button', className: 'text-btn accent mini-fav', text: '收藏', 'aria-label': '收藏 ' + e.headword,
+        on: { click: () => app.toggleFav(e.slug, true) } })))));
   }
   function scheduleRecent() { clearTimeout(recentTimer); recentTimer = setTimeout(renderRecent, 60); }
 
   renderRecent();
+  setRecent(false);
   syncCtxUI();
 
   return {
     lookup: (q, opts) => run(q, opts),
     openEntry,
     backToZh,
-    focus: () => { if (!resultEl.firstChild) qEl.focus(); },
+    focus: () => { if (page.hidden) qEl.focus(); },
     onChange: () => scheduleRecent(),
+    show: () => { if (page.hidden) sync(); },
     isBusy: () => busy || document.activeElement === ctxEl,
-    hasResult: () => !!resultEl.firstChild,
+    hasResult: () => !page.hidden,
+    isPushed: () => !page.hidden,
+    back: () => back(),
   };
 }

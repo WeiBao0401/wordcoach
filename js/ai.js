@@ -46,13 +46,13 @@ function httpError(status, data, model) {
   const { code, message } = errorDetail(data);
   const blob = (code + ' ' + message).toLowerCase();
   if (status === 401 || blob.includes('invalid_api_key') || blob.includes('invalidapikey')) {
-    return new AIError('百炼 API Key 不对或已失效：到“我的”里重新填。', 'badkey');
+    return new AIError('百炼 API Key 不对或已失效：到“词库 → 我”里重新填。', 'badkey');
   }
   if (blob.includes('arrearage') || blob.includes('overdue') || blob.includes('good standing')) {
     return new AIError('百炼账户欠费或预算用完了，去百炼控制台看一下。', 'billing');
   }
   if (blob.includes('model_not_found') || blob.includes('model not exist') || blob.includes('does not exist')) {
-    return new AIError(`模型“${model}”用不了：到“我的”里换一个。`, 'model');
+    return new AIError(`模型“${model}”用不了：到“词库 → 我”里换一个。`, 'model');
   }
   if (blob.includes('data_inspection') || blob.includes('datainspection')) {
     return new AIError('内容没通过百炼的安全检查，换个说法试试。', 'inspection');
@@ -131,9 +131,9 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
   async function askJSON(kind, user, { signal } = {}) {
     const s = getSettings();
     const mock = !!s.mock;
-    if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：到“我的”里填上，或者先打开模拟模式。', 'nokey');
+    if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：到“词库 → 我”里填上，或者先打开模拟模式。', 'nokey');
     // an invisible character in the key makes fetch throw, which would look like a network problem
-    if (!mock && !keyOk(s.apiKey)) throw new AIError('百炼 API Key 格式不对：到“我的”里重新粘贴。', 'badkey');
+    if (!mock && !keyOk(s.apiKey)) throw new AIError('百炼 API Key 格式不对：到“词库 → 我”里重新粘贴。', 'badkey');
     // test hook (?mock=offline): every call fails the way a dropped connection does
     if (mock && s.mockFail === 'network') {
       await sleep(300);
@@ -154,7 +154,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
             retryTimeout: kind !== 'core' && kind !== 'zh' });
       } catch (e) {
         if (e instanceof Truncated) {
-          if (++cuts >= 2) throw new AIError(`模型“${model}”的回答太长，两次都被截断了：再试一次，或者到“我的”里换个模型。`, 'truncated');
+          if (++cuts >= 2) throw new AIError(`模型“${model}”的回答太长，两次都被截断了：再试一次，或者到“词库 → 我”里换个模型。`, 'truncated');
           continue;
         }
         throw e;
@@ -174,7 +174,7 @@ export function createAI({ getSettings, fetchImpl, sleep = sleepMs, random = Mat
   async function speedTest({ choices = MODEL_CHOICES, word = SPEED_WORD, timeoutMs = SPEED_TIMEOUT_MS, onResult } = {}) {
     const s = getSettings();
     const mock = !!s.mock;
-    if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：先在上面“百炼 API Key”里填好，再来测。', 'nokey');
+    if (!mock && !s.apiKey) throw new AIError('还没填百炼 API Key：先在上面的“Key”里填好，再来测。', 'nokey');
     if (!mock && !keyOk(s.apiKey)) throw new AIError('百炼 API Key 格式不对：在上面重新粘贴一次。', 'badkey');
     const results = [];
     for (const c of choices) {
